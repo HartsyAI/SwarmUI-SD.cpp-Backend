@@ -1,5 +1,4 @@
 using FreneticUtilities.FreneticDataSyntax;
-using Hartsy.Extensions.SDcppExtension.Config;
 using Hartsy.Extensions.SDcppExtension.Utils;
 using SwarmUI.Backends;
 using SwarmUI.Core;
@@ -17,9 +16,51 @@ namespace Hartsy.Extensions.SDcppExtension.SwarmBackends;
 public class SDcppBackend : AbstractT2IBackend
 {
     /// <summary>
-    /// Configuration settings controlling SD.cpp behavior, paths, and optimization flags.
+    /// Configuration settings for the SD.cpp backend, required by SwarmUI's backend registration system.
     /// </summary>
-    public SDcppSettings Settings { get; set; }
+    public class SDcppBackendSettings : AutoConfiguration
+    {
+        [ConfigComment("Path to the stable-diffusion.cpp executable (sd.exe on Windows, sd on Linux/Mac)")]
+        public string ExecutablePath = "sd.exe";
+
+        [ConfigComment("Number of threads to use during computation (0 for auto-detect)")]
+        public int Threads = 4;
+
+        [ConfigComment("GPU device to use (auto, cpu, cuda, metal, vulkan, opencl, sycl)")]
+        public string Device = "auto";
+
+        [ConfigComment("Weight precision type (f32, f16, q8_0, q4_0, q4_1, q5_0, q5_1, q2_k, q3_k, q4_k, q5_k, q6_k)")]
+        public string WeightType = "f16";
+
+        [ConfigComment("Enable VAE tiling to reduce memory usage")]
+        public bool VAETiling = false;
+
+        [ConfigComment("Run VAE on CPU instead of GPU")]
+        public bool VAEOnCPU = false;
+
+        [ConfigComment("Run CLIP text encoder on CPU instead of GPU")]
+        public bool CLIPOnCPU = false;
+
+        [ConfigComment("Enable Flash Attention optimization")]
+        public bool FlashAttention = false;
+
+        [ConfigComment("Enable debug mode for verbose logging")]
+        public bool DebugMode = false;
+
+        [ConfigComment("Timeout for SD.cpp process operations in seconds")]
+        public int ProcessTimeoutSeconds = 300;
+
+        [ConfigComment("Working directory for temporary files (empty for system temp)")]
+        public string WorkingDirectory = "";
+
+        [ConfigComment("Default model path to use if none specified")]
+        public string DefaultModelPath = "";
+
+        [ConfigComment("Default VAE path to use if none specified")]
+        public string DefaultVAEPath = "";
+    }
+    /// <summary>Configuration settings controlling SD.cpp behavior, paths, and optimization flags</summary>
+    public SDcppBackendSettings Settings => SettingsRaw as SDcppBackendSettings;
 
     /// <summary>
     /// Manages SD.cpp process lifecycle, command execution, and output capture.
@@ -51,9 +92,6 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
-
-            // TODO: Load settings from file when settings system is implemented
-            Settings = new SDcppSettings();
 
             ProcessManager = new SDcppProcessManager(Settings);
             if (!ProcessManager.ValidateExecutable())

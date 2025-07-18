@@ -1,6 +1,7 @@
 using Hartsy.Extensions.SDcppExtension.SwarmBackends;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
+using SwarmUI.Backends;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
@@ -13,6 +14,11 @@ namespace Hartsy.Extensions.SDcppExtension.WebAPI;
 /// </summary>
 public static class SDcppAPI
 {
+    /// <summary>Permission group for SD.cpp backend operations</summary>
+    public static PermInfoGroup SDcppPermGroup = new("SDcpp", "Permissions related to SD.cpp backend operations.");
+
+    /// <summary>Permission for reading SD.cpp backend status and information</summary>
+    public static PermInfo PermReadBackendInfo = Permissions.Register(new("sdcpp_read_backend_info", "SD.cpp Read Backend Info", "Allows reading SD.cpp backend status, models, and settings.", PermissionDefault.POWERUSERS, SDcppPermGroup));
     /// <summary>
     /// Registers all SD.cpp API endpoints with SwarmUI's API system.
     /// Called during extension initialization to make endpoints available to the web interface.
@@ -24,9 +30,9 @@ public static class SDcppAPI
             Logs.Info("[SDcppAPI] Registering API endpoints");
 
             // Register API endpoints using the correct pattern
-            API.RegisterAPICall(GetBackendStatus);
-            API.RegisterAPICall(ListModels);
-            API.RegisterAPICall(GetSettings);
+            API.RegisterAPICall(GetBackendStatus, false, PermReadBackendInfo);
+            API.RegisterAPICall(ListSDcppModels, false, PermReadBackendInfo);
+            API.RegisterAPICall(GetSDcppSettings, false, PermReadBackendInfo);
 
             Logs.Info("[SDcppAPI] API endpoints registered successfully");
         }
@@ -84,7 +90,7 @@ public static class SDcppAPI
     /// </summary>
     /// <param name="session">Current user session for authentication and logging</param>
     /// <returns>JSON object containing model information</returns>
-    public static async Task<JObject> ListModels(Session session)
+    public static async Task<JObject> ListSDcppModels(Session session)
     {
         try
         {
@@ -118,7 +124,7 @@ public static class SDcppAPI
     /// </summary>
     /// <param name="session">Current user session for authentication and logging</param>
     /// <returns>JSON object containing settings information</returns>
-    public static async Task<JObject> GetSettings(Session session)
+    public static async Task<JObject> GetSDcppSettings(Session session)
     {
         try
         {

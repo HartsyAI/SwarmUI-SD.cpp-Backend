@@ -1,8 +1,8 @@
-using Hartsy.Extensions.SDcppExtension.Config;
 using SwarmUI.Utils;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using static Hartsy.Extensions.SDcppExtension.SwarmBackends.SDcppBackend;
 
 namespace Hartsy.Extensions.SDcppExtension.Utils;
 
@@ -13,11 +13,11 @@ namespace Hartsy.Extensions.SDcppExtension.Utils;
 public class SDcppProcessManager : IDisposable
 {
     public Process Process;
-    public readonly SDcppSettings Settings;
+    public readonly SDcppBackendSettings Settings;
     public readonly string WorkingDirectory;
     public bool Disposed = false;
 
-    public SDcppProcessManager(SDcppSettings settings)
+    public SDcppProcessManager(SDcppBackendSettings settings)
     {
         Settings = settings;
         WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory) 
