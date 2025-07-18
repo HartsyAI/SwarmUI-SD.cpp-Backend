@@ -1,41 +1,84 @@
-using Hartsy.Extensions.SDdotNETExtension.WebAPI;
+using Hartsy.Extensions.SDcppExtension.SwarmBackends;
+using Hartsy.Extensions.SDcppExtension.WebAPI;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 using System.IO;
 
-namespace Hartsy.Extensions.SDdotNETExtension;
+namespace Hartsy.Extensions.SDcppExtension;
 
-/// <summary>.</summary>
-public class SDdotNETExtension : Extension
+/// <summary>
+/// Main extension class that integrates stable-diffusion.cpp with SwarmUI.
+/// Registers the SD.cpp backend type and API endpoints during SwarmUI initialization.
+/// Provides a direct CLI-based integration replacing previous wrapper approaches.
+/// </summary>
+public class SDcppExtension : Extension
 {
-    /// <summary> Extension version for compatibility tracking.</summary>
-    public static new readonly string Version = "0.0.1";
+    /// <summary>Extension version for compatibility tracking</summary>
+    public static new readonly string Version = "0.1.0";
 
-    /// <summary>Pre-initialization phase - registers web assets before SwarmUI core initialization.
-    /// This runs before the main UI is ready, so we only register static assets here.</summary>
+    /// <summary>
+    /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
+    /// This runs before the main UI is ready, so we only register static assets here.
+    /// </summary>
     public override void OnPreInit()
     {
         try
         {
-            Logs.Debug($"[SDdotNETExtension] Pre-initializing extension v{Version}");
-            //ScriptFiles.Add("Assets/voice-core.js");
-            //StyleSheetFiles.Add("Assets/voice-assistant.css");
+            Logs.Debug($"[SDcppExtension] Pre-initializing extension v{Version}");
+            // Register any CSS/JS assets here if needed
+            // ScriptFiles.Add("Assets/sdcpp-frontend.js");
+            // StyleSheetFiles.Add("Assets/sdcpp-styles.css");
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDdotNETExtension] Critical error during pre-initialization: {ex.Message}");
+            Logs.Error($"[SDcppExtension] Critical error during pre-initialization: {ex.Message}");
         }
     }
 
-    /// <summary>Main initialization phase - registers API endpoints and validates configuration.
-    /// This runs after SwarmUI core is ready, allowing us to register API calls and validate setup.</summary>
-    public override async void OnInit()
+    /// <summary>
+    /// Initializes the SD.cpp extension by registering the backend type and API endpoints.
+    /// Called once during SwarmUI startup to make SD.cpp functionality available.
+    /// </summary>
+    public override void OnInit()
     {
-        SDdotNETBackendAPI.Register(); // Register custom API endpoints to use in Swarm
+        try
+        {
+            Logs.Info($"[SDcppExtension] Initializing SD.cpp extension v{Version}");
+
+            // Register the SD.cpp backend type
+            Program.Backends.RegisterBackendType<SDcppBackend>("sdcpp", "SD.cpp Backend", 
+                "A backend powered by stable-diffusion.cpp for fast, efficient image generation.", true);
+
+            // Register API endpoints
+            SDcppAPI.Register();
+
+            Logs.Info("[SDcppExtension] Extension initialized successfully");
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"[SDcppExtension] Failed to initialize extension: {ex.Message}");
+            throw;
+        }
     }
 
-    /// <summary>Creates a standardized error response for API endpoints.</summary>
+    /// <summary>
+    /// Shutdown cleanup
+    /// </summary>
+    public override void OnShutdown()
+    {
+        try
+        {
+            Logs.Info("[SDcppExtension] Shutting down extension");
+            // Cleanup resources if needed
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcppExtension] Error during shutdown: {ex.Message}");
+        }
+    }
+
+    /// <summary>Creates a standardized error response for API endpoints</summary>
     public static JObject CreateErrorResponse(string message, string errorCode = null, Exception exception = null)
     {
         JObject response = new()
@@ -50,13 +93,13 @@ public class SDdotNETExtension : Extension
         }
         if (exception != null)
         {
-            Logs.Error($"[SDdotNETExtension] Exception details: {exception}");
+            Logs.Error($"[SDcppExtension] Exception details: {exception}");
             response["error_type"] = exception.GetType().Name;
         }
         return response;
     }
 
-    /// <summary>Creates a standardized success response for API endpoints.</summary>
+    /// <summary>Creates a standardized success response for API endpoints</summary>
     public static JObject CreateSuccessResponse(object data = null, string message = null)
     {
         JObject response = new()
