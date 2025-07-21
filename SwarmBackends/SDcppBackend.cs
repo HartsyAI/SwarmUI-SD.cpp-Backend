@@ -1,10 +1,13 @@
 using FreneticUtilities.FreneticDataSyntax;
+using Hartsy.Extensions.SDcppExtension.Config;
 using Hartsy.Extensions.SDcppExtension.Utils;
 using SwarmUI.Backends;
 using SwarmUI.Core;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
+using System.Diagnostics;
 using System.IO;
+using System.Text;
 
 namespace Hartsy.Extensions.SDcppExtension.SwarmBackends;
 
@@ -92,6 +95,15 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
+
+            // Ensure SD.cpp is available, prompt for download if needed
+            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath);
+            if (updatedExecutablePath != Settings.ExecutablePath)
+            {
+                // Update the settings with the new path
+                Settings.ExecutablePath = updatedExecutablePath;
+                Logs.Info($"[SDcpp] Updated executable path to: {updatedExecutablePath}");
+            }
 
             ProcessManager = new SDcppProcessManager(Settings);
             if (!ProcessManager.ValidateExecutable())
