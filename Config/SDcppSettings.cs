@@ -4,61 +4,41 @@ using SwarmUI.Core;
 namespace Hartsy.Extensions.SDcppExtension.Config;
 
 /// <summary>
-/// Configuration settings that control SD.cpp backend behavior, performance optimizations,
-/// and CLI execution parameters. These settings are used to customize how the backend
-/// interacts with the stable-diffusion.cpp executable.
+/// Configuration settings for the SD.cpp backend. SD.cpp will be automatically downloaded
+/// and configured based on your device selection.
 /// </summary>
 public class SDcppSettings : AutoConfiguration
 {
-    /// <summary>Full path to the stable-diffusion.cpp executable file</summary>
-    [ConfigComment("Path to the stable-diffusion.cpp executable (sd.exe on Windows, sd on Linux/Mac)")]
-    public string ExecutablePath = "sd.exe";
+    [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.")]
+    [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)"])]
+    public string Device = "cpu";
 
-    /// <summary>Maximum number of threads to use</summary>
-    [ConfigComment("Number of threads to use during computation (-1 for auto)")]
-    public int Threads = -1;
+    [ConfigComment("Number of CPU threads to use during generation (0 for auto-detect based on your CPU).")]
+    public int Threads = 0;
 
-    /// <summary>Default model path</summary>
-    [ConfigComment("Default model path (can be overridden per generation)")]
-    public string DefaultModelPath = "";
-
-    /// <summary>Default VAE path</summary>
-    [ConfigComment("Default VAE path (optional)")]
-    public string DefaultVAEPath = "";
-
-    /// <summary>Enable debug logging</summary>
-    [ConfigComment("Enable debug logging for SD.cpp backend")]
-    public bool DebugMode = false;
-
-    /// <summary>GPU device to use</summary>
-    [ConfigComment("GPU device to use (auto, cpu, cuda, metal, vulkan, opencl, sycl)")]
-    public string Device = "auto";
-
-    /// <summary>Precision type for model weights (f32, f16, q8_0, q4_0, q4_1, q5_0, q5_1, q2_k, q3_k, q4_k, q5_k, q6_k)</summary>
-    [ConfigComment("Weight type (f32, f16, q8_0, q4_0, q4_1, q5_0, q5_1, q2_K, q3_K, q4_K)")]
+    [ConfigComment("Model precision type. Lower precision uses less memory but may reduce quality.\n'f16' is recommended for most users.\n'q4_0' and 'q8_0' are quantized versions that use less memory.")]
+    [ManualSettingsOptions(Impl = null, Vals = ["f32", "f16", "q8_0", "q4_0"], ManualNames = ["f32 (Highest Quality)", "f16 (Recommended)", "q8_0 (Lower Memory)", "q4_0 (Lowest Memory)"])]
     public string WeightType = "f16";
 
-    /// <summary>Enable VAE tiling</summary>
-    [ConfigComment("Enable VAE tiling to reduce memory usage")]
+    [ConfigComment("Enable VAE tiling to reduce memory usage. Recommended for systems with limited RAM/VRAM.")]
     public bool VAETiling = true;
 
-    /// <summary>Keep VAE on CPU</summary>
-    [ConfigComment("Keep VAE on CPU to reduce VRAM usage")]
+    [ConfigComment("Keep VAE processing on CPU instead of GPU. Useful if you're running out of VRAM.")]
     public bool VAEOnCPU = false;
 
-    /// <summary>Keep CLIP on CPU</summary>
-    [ConfigComment("Keep CLIP on CPU to reduce VRAM usage")]
+    [ConfigComment("Keep CLIP text encoder on CPU instead of GPU. Useful if you're running out of VRAM.")]
     public bool CLIPOnCPU = false;
 
-    /// <summary>Use Flash Attention</summary>
-    [ConfigComment("Use Flash Attention in diffusion model (may reduce quality but saves VRAM)")]
+    [ConfigComment("Enable Flash Attention optimization. May reduce quality slightly but saves memory.")]
     public bool FlashAttention = false;
 
-    /// <summary>Process timeout in seconds</summary>
-    [ConfigComment("Timeout for SD.cpp process operations in seconds")]
-    public int ProcessTimeoutSeconds = 300;
+    [ConfigComment("Maximum time to wait for image generation before timing out (in seconds).")]
+    public int ProcessTimeoutSeconds = 600;
 
-    /// <summary>Directory where SD.cpp process will be executed and temporary files created</summary>
-    [ConfigComment("Working directory for temporary files (empty for system temp)")]
-    public string WorkingDirectory = "";
+    [ConfigComment("Enable debug logging to help troubleshoot issues.")]
+    public bool DebugMode = false;
+
+    // Internal settings - not exposed to user
+    internal string ExecutablePath = "";
+    internal string WorkingDirectory = "";
 }

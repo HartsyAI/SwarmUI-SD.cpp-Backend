@@ -87,6 +87,15 @@ public class SDcppBackend : AbstractT2IBackend
     ];
 
     /// <summary>
+    /// Adds a status message during backend initialization
+    /// </summary>
+    public new void AddLoadStatus(string message)
+    {
+        Logs.Info($"[SDcpp] {message}");
+        // TODO: If SwarmUI has a status reporting mechanism, use it here
+    }
+
+    /// <summary>
     /// Initializes the SD.cpp backend by loading configuration, validating the executable,
     /// and setting up the process manager. Called once during SwarmUI startup.
     /// </summary>
@@ -95,13 +104,16 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
+            AddLoadStatus("Starting SD.cpp backend initialization...");
 
-            // Ensure SD.cpp is available, prompt for download if needed
-            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath);
+            // Ensure SD.cpp is available, download device-specific binary if needed
+            AddLoadStatus($"Checking for SD.cpp binary (device: {Settings.Device})...");
+            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath, Settings.Device);
             if (updatedExecutablePath != Settings.ExecutablePath)
             {
-                // Update the settings with the new path
+                // Update the internal settings with the new path
                 Settings.ExecutablePath = updatedExecutablePath;
+                AddLoadStatus($"SD.cpp binary configured: {Path.GetFileName(updatedExecutablePath)}");
                 Logs.Info($"[SDcpp] Updated executable path to: {updatedExecutablePath}");
             }
 
@@ -188,6 +200,11 @@ public class SDcppBackend : AbstractT2IBackend
             {
                 // Build parameters for SD.cpp
                 System.Collections.Generic.Dictionary<string, object> parameters = BuildGenerationParameters(input, tempDir);
+                
+                if (Settings.DebugMode)
+                {
+                    Logs.Debug($"[SDcpp] Generation parameters: {string.Join(", ", parameters.Select(p => $"{p.Key}={p.Value}"))}");
+                }
 
                 // Execute SD.cpp
                 (bool success, string output, string error) = await ProcessManager.ExecuteAsync(parameters);
@@ -259,8 +276,49 @@ public class SDcppBackend : AbstractT2IBackend
         if (input.TryGet(T2IParamTypes.Seed, out long seed))
             parameters["seed"] = seed;
 
-        // Sampler parameter will be implemented later
-        parameters["sampling_method"] = "euler_a";
+        // Map SwarmUI sampler to SD.cpp sampling method
+        // Try to get sampler from standard parameter types first
+        string swarmSampler = "euler_a"; // Default fallback
+        
+        // Check if there's a sampler parameter - use reflection to avoid obsolete warning
+        // This is a temporary workaround until we have proper sampler parameter access
+        try
+        {
+            var samplerField = input.GetType().GetProperty("Sampler");
+            if (samplerField != null)
+            {
+                var samplerValue = samplerField.GetValue(input);
+                swarmSampler = samplerValue?.ToString() ?? "euler_a";
+            }
+        }
+        catch
+        {
+            // Fallback to default if reflection fails
+            swarmSampler = "euler_a";
+        }
+        
+        if (!string.IsNullOrEmpty(swarmSampler))
+        {
+            // Map SwarmUI sampler names to SD.cpp sampling methods
+            string sdcppSampler = swarmSampler.ToLowerInvariant() switch
+            {
+                "euler" => "euler",
+                "euler_a" or "euler_ancestral" => "euler_a",
+                "heun" => "heun",
+                "dpm_2" or "dpm2" => "dpm2",
+                "dpm_plus_plus_2s_ancestral" or "dpm++_2s_a" => "dpm++2s_a",
+                "dpm_plus_plus_2m" or "dpm++_2m" => "dpm++2m",
+                "dpm_plus_plus_2m_v2" or "dpm++_2mv2" => "dpm++2mv2",
+                "ddim" => "ddim_trailing",
+                "lcm" => "lcm",
+                _ => "euler_a" // Default fallback
+            };
+            parameters["sampling_method"] = sdcppSampler;
+        }
+        else
+        {
+            parameters["sampling_method"] = "euler_a"; // Default
+        }
 
         // Model path
         if (!string.IsNullOrEmpty(CurrentModelName))
@@ -271,9 +329,9 @@ public class SDcppBackend : AbstractT2IBackend
                 parameters["model"] = model.RawFilePath;
         }
 
-        // Output path
-        string outputPath = Path.Combine(outputDir, "output.png");
-        parameters["output"] = outputPath;
+        // Output directory (SD.cpp will generate files in this directory)
+        // Don't specify exact filename, let SD.cpp handle naming
+        parameters["output"] = Path.Combine(outputDir, "generated_%03d.png");
 
         // Image-to-image parameters
         if (input.TryGet(T2IParamTypes.InitImage, out Image initImage))

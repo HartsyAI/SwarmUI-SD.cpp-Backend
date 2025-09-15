@@ -22,11 +22,12 @@ public static class SDcppDownloadManager
     private const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
     
     /// <summary>
-    /// Prompts user to download SD.cpp if not found and downloads if confirmed.
+    /// Ensures SD.cpp is available, downloading the appropriate binary based on device selection.
     /// </summary>
     /// <param name="executablePath">Current configured executable path</param>
+    /// <param name="deviceType">Device type (cpu, cuda, vulkan) to determine which binary to download</param>
     /// <returns>Updated executable path after download, or original if cancelled/failed</returns>
-    public static async Task<string> EnsureSDcppAvailable(string executablePath)
+    public static async Task<string> EnsureSDcppAvailable(string executablePath, string deviceType = "cpu")
     {
         try
         {
@@ -48,7 +49,7 @@ public static class SDcppDownloadManager
             }
 
             // Get download info with fallback for 403 errors
-            var downloadInfo = await GetDownloadInfo();
+            var downloadInfo = await GetDownloadInfo(deviceType);
             if (downloadInfo == null)
             {
                 Logs.Error("[SDcpp] Failed to get download information");
@@ -112,7 +113,8 @@ public static class SDcppDownloadManager
     /// <summary>
     /// Gets download information for the current platform from GitHub releases
     /// </summary>
-    private static async Task<DownloadInfo> GetDownloadInfo()
+    /// <param name="deviceType">Device type (cpu, cuda, vulkan) to determine which binary to download</param>
+    private static async Task<DownloadInfo> GetDownloadInfo(string deviceType = "cpu")
     {
         try
         {
@@ -127,7 +129,7 @@ public static class SDcppDownloadManager
             {
                 // Fallback to direct release page scraping if API is rate limited
                 Logs.Warning("[SDcpp] GitHub API rate limited, using fallback method...");
-                return GetFallbackDownloadInfo();
+                return await GetFallbackDownloadInfo(deviceType);
             }
             
             var releaseData = JObject.Parse(response);
@@ -171,20 +173,21 @@ public static class SDcppDownloadManager
             Logs.Error($"[SDcpp] Error fetching download info: {ex.Message}");
             // Try fallback method on any error
             Logs.Info("[SDcpp] Attempting fallback download method...");
-            return GetFallbackDownloadInfo();
+            return await GetFallbackDownloadInfo(deviceType);
         }
     }
 
     /// <summary>
     /// Fallback method when GitHub API is rate limited - uses hardcoded latest known release
     /// </summary>
-    private static DownloadInfo GetFallbackDownloadInfo()
+    /// <param name="deviceType">Device type to determine which binary to download</param>
+    private static Task<DownloadInfo> GetFallbackDownloadInfo(string deviceType)
     {
         try
         {
             Logs.Info("[SDcpp] Using fallback download URLs...");
             
-            string assetName = GetPlatformAssetName();
+            string assetName = GetPlatformAssetName(deviceType);
             if (string.IsNullOrEmpty(assetName))
             {
                 return null;
@@ -195,61 +198,83 @@ public static class SDcppDownloadManager
             
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                return new DownloadInfo
+                return Task.FromResult(deviceType.ToLowerInvariant() switch
                 {
-                    FileName = "sd-master-1896b28-bin-win-vulkan-x64.zip",
-                    DownloadUrl = baseUrl + "sd-master-1896b28-bin-win-vulkan-x64.zip",
-                    Size = 7343827,
-                    TagName = "master-1896b28"
-                };
+                    "cuda" => new DownloadInfo
+                    {
+                        FileName = "sd-master-1896b28-bin-win-cuda12-x64.zip",
+                        DownloadUrl = baseUrl + "sd-master-1896b28-bin-win-cuda12-x64.zip",
+                        Size = 48234496, // ~46MB
+                        TagName = "master-1896b28"
+                    },
+                    "vulkan" => new DownloadInfo
+                    {
+                        FileName = "sd-master-1896b28-bin-win-vulkan-x64.zip",
+                        DownloadUrl = baseUrl + "sd-master-1896b28-bin-win-vulkan-x64.zip",
+                        Size = 7343827, // ~7MB
+                        TagName = "master-1896b28"
+                    },
+                    "cpu" or _ => new DownloadInfo
+                    {
+                        FileName = "sd-master-1896b28-bin-win-avx2-x64.zip",
+                        DownloadUrl = baseUrl + "sd-master-1896b28-bin-win-avx2-x64.zip",
+                        Size = 1782579, // ~1.7MB
+                        TagName = "master-1896b28"
+                    }
+                });
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                return new DownloadInfo
+                return Task.FromResult(new DownloadInfo
                 {
                     FileName = "sd-master--bin-Linux-Ubuntu-24.04-x86_64.zip",
                     DownloadUrl = baseUrl + "sd-master--bin-Linux-Ubuntu-24.04-x86_64.zip",
                     Size = 2374961,
                     TagName = "master-1896b28"
-                };
+                });
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                return new DownloadInfo
+                return Task.FromResult(new DownloadInfo
                 {
                     FileName = "sd-master--bin-Darwin-macOS-14.7.6-arm64.zip",
                     DownloadUrl = baseUrl + "sd-master--bin-Darwin-macOS-14.7.6-arm64.zip",
                     Size = 4328149,
                     TagName = "master-1896b28"
-                };
+                });
             }
 
-            return null;
+            return Task.FromResult<DownloadInfo>(null);
         }
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error in fallback download info: {ex.Message}");
-            return null;
+            return Task.FromResult<DownloadInfo>(null);
         }
     }
 
     /// <summary>
-    /// Determines the appropriate asset name based on current platform
+    /// Determines the appropriate asset name based on current platform and device type
     /// </summary>
-    private static string GetPlatformAssetName()
+    /// <param name="deviceType">Device type (cpu, cuda, vulkan) to determine which binary to download</param>
+    private static string GetPlatformAssetName(string deviceType = "cpu")
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            // Prefer Vulkan for Windows as it's most compatible
-            return "win-vulkan-x64";
+            return deviceType.ToLowerInvariant() switch
+            {
+                "cuda" => "win-cuda12-x64",
+                "vulkan" => "win-vulkan-x64", 
+                "cpu" or _ => "win-avx2-x64" // Default to AVX2 CPU build for best performance
+            };
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
-            return "Linux-Ubuntu";
+            return "Linux-Ubuntu"; // Linux builds are typically CPU-only
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            return "Darwin-macOS";
+            return "Darwin-macOS"; // macOS builds are typically CPU-only
         }
 
         return null;

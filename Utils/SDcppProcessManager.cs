@@ -73,6 +73,16 @@ public class SDcppProcessManager : IDisposable
 
         if (!string.IsNullOrEmpty(Settings.WeightType))
             args.Add($"--type {Settings.WeightType}");
+
+        // Force CPU usage if device is set to CPU to avoid Vulkan memory issues
+        if (Settings.Device.ToLowerInvariant() == "cpu")
+        {
+            // These flags force CPU usage and prevent GPU acceleration
+            args.Add("--vae-on-cpu");
+            args.Add("--clip-on-cpu");
+            // Enable VAE tiling to reduce memory usage on CPU
+            args.Add("--vae-tiling");
+        }
         if (parameters.TryGetValue("model", out var model) && !string.IsNullOrEmpty(model.ToString()))
             args.Add($"--model \"{model}\"");
         else if (!string.IsNullOrEmpty(Settings.DefaultModelPath))
@@ -112,14 +122,18 @@ public class SDcppProcessManager : IDisposable
             args.Add($"--output \"{output}\"");
 
 
-        if (Settings.VAETiling)
-            args.Add("--vae-tiling");
+        // Apply individual settings only if not using CPU device (to avoid duplicates)
+        if (Settings.Device.ToLowerInvariant() != "cpu")
+        {
+            if (Settings.VAETiling)
+                args.Add("--vae-tiling");
 
-        if (Settings.VAEOnCPU)
-            args.Add("--vae-on-cpu");
+            if (Settings.VAEOnCPU)
+                args.Add("--vae-on-cpu");
 
-        if (Settings.CLIPOnCPU)
-            args.Add("--clip-on-cpu");
+            if (Settings.CLIPOnCPU)
+                args.Add("--clip-on-cpu");
+        }
 
         if (Settings.FlashAttention)
             args.Add("--diffusion-fa");
@@ -163,6 +177,20 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+
+            // Force CPU-only mode by disabling GPU backends via environment variables
+            if (Settings.Device.ToLowerInvariant() == "cpu")
+            {
+                processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
+                processInfo.EnvironmentVariables["GGML_USE_CUDA"] = "0";
+                processInfo.EnvironmentVariables["GGML_USE_METAL"] = "0";
+                processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = "0";
+                processInfo.EnvironmentVariables["GGML_USE_SYCL"] = "0";
+                if (Settings.DebugMode)
+                {
+                    Logs.Debug("[SDcpp] Forcing CPU-only mode via environment variables");
+                }
+            }
 
             if (Settings.DebugMode)
             {
