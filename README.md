@@ -1,2 +1,2 @@
-# SwarmUI-StableDiffusion.NET-Backend
-Adds a new backend for SwarmUI using StableDiffusion.NET
+# SwarmUI-StableDiffusion.cpp-Backend
+Adds a new backend for SwarmUI using StableDiffusion.cpp
