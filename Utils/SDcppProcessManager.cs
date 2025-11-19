@@ -61,10 +61,12 @@ public class SDcppProcessManager : IDisposable
     /// <summary>
     /// Constructs SD.cpp command-line arguments from generation parameters.
     /// Handles model paths, generation settings, memory optimization flags, and input images.
+    /// Supports both standard SD models and Flux models with their multi-component architecture.
     /// </summary>
     /// <param name="parameters">Dictionary containing generation parameters like prompt, model, dimensions, etc.</param>
+    /// <param name="isFluxModel">Whether this is a Flux model (uses different parameter names)</param>
     /// <returns>Complete command-line argument string ready for process execution</returns>
-    public string BuildCommandLine(Dictionary<string, object> parameters)
+    public string BuildCommandLine(Dictionary<string, object> parameters, bool isFluxModel = false)
     {
         List<string> args = [];
 
@@ -83,15 +85,39 @@ public class SDcppProcessManager : IDisposable
             // Enable VAE tiling to reduce memory usage on CPU
             args.Add("--vae-tiling");
         }
-        if (parameters.TryGetValue("model", out var model) && !string.IsNullOrEmpty(model.ToString()))
-            args.Add($"--model \"{model}\"");
-        else if (!string.IsNullOrEmpty(Settings.DefaultModelPath))
-            args.Add($"--model \"{Settings.DefaultModelPath}\"");
 
-        if (parameters.TryGetValue("vae", out var vae) && !string.IsNullOrEmpty(vae.ToString()))
-            args.Add($"--vae \"{vae}\"");
-        else if (!string.IsNullOrEmpty(Settings.DefaultVAEPath))
-            args.Add($"--vae \"{Settings.DefaultVAEPath}\"");
+        // Flux models use different parameter names for multi-component architecture
+        if (isFluxModel)
+        {
+            // Flux uses --diffusion-model instead of --model
+            if (parameters.TryGetValue("diffusion_model", out var diffusionModel) && !string.IsNullOrEmpty(diffusionModel.ToString()))
+                args.Add($"--diffusion-model \"{diffusionModel}\"");
+
+            // Flux requires CLIP-L text encoder
+            if (parameters.TryGetValue("clip_l", out var clipL) && !string.IsNullOrEmpty(clipL.ToString()))
+                args.Add($"--clip_l \"{clipL}\"");
+
+            // Flux requires T5-XXL text encoder
+            if (parameters.TryGetValue("t5xxl", out var t5xxl) && !string.IsNullOrEmpty(t5xxl.ToString()))
+                args.Add($"--t5xxl \"{t5xxl}\"");
+
+            // VAE for Flux
+            if (parameters.TryGetValue("vae", out var fluxVae) && !string.IsNullOrEmpty(fluxVae.ToString()))
+                args.Add($"--vae \"{fluxVae}\"");
+        }
+        else
+        {
+            // Standard SD model parameters
+            if (parameters.TryGetValue("model", out var model) && !string.IsNullOrEmpty(model.ToString()))
+                args.Add($"--model \"{model}\"");
+            else if (!string.IsNullOrEmpty(Settings.DefaultModelPath))
+                args.Add($"--model \"{Settings.DefaultModelPath}\"");
+
+            if (parameters.TryGetValue("vae", out var vae) && !string.IsNullOrEmpty(vae.ToString()))
+                args.Add($"--vae \"{vae}\"");
+            else if (!string.IsNullOrEmpty(Settings.DefaultVAEPath))
+                args.Add($"--vae \"{Settings.DefaultVAEPath}\"");
+        }
 
 
         if (parameters.TryGetValue("prompt", out var prompt))
@@ -145,6 +171,9 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("strength", out var strength))
             args.Add($"--strength {strength}");
 
+        // LoRA support
+        if (parameters.TryGetValue("lora_model_dir", out var loraDir) && !string.IsNullOrEmpty(loraDir.ToString()))
+            args.Add($"--lora-model-dir \"{loraDir}\"");
 
         if (Settings.DebugMode)
             args.Add("--verbose");
@@ -157,13 +186,14 @@ public class SDcppProcessManager : IDisposable
     /// Manages the full process lifecycle from start to completion, including error handling and cleanup.
     /// </summary>
     /// <param name="parameters">Generation parameters to pass to SD.cpp</param>
+    /// <param name="isFluxModel">Whether this is a Flux model</param>
     /// <returns>Tuple containing success status, stdout output, and stderr output</returns>
-    public async Task<(bool Success, string Output, string Error)> ExecuteAsync(Dictionary<string, object> parameters)
+    public async Task<(bool Success, string Output, string Error)> ExecuteAsync(Dictionary<string, object> parameters, bool isFluxModel = false)
     {
         if (!ValidateExecutable())
             return (false, "", "SD.cpp executable validation failed");
 
-        string commandLine = BuildCommandLine(parameters);
+        string commandLine = BuildCommandLine(parameters, isFluxModel);
         
         try
         {

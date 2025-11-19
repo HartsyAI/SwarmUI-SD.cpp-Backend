@@ -26,6 +26,11 @@ public class SDcppExtension : Extension
         try
         {
             Logs.Debug($"[SDcppExtension] Pre-initializing extension v{Version}");
+
+            // Subscribe to model events for automatic updates
+            Program.ModelRefreshEvent += OnModelRefresh;
+            Program.ModelPathsChangedEvent += OnModelPathsChanged;
+
             // Register any CSS/JS assets here if needed
             // ScriptFiles.Add("Assets/sdcpp-frontend.js");
             // StyleSheetFiles.Add("Assets/sdcpp-styles.css");
@@ -33,6 +38,38 @@ public class SDcppExtension : Extension
         catch (Exception ex)
         {
             Logs.Error($"[SDcppExtension] Critical error during pre-initialization: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Called when SwarmUI refreshes its model list
+    /// </summary>
+    private void OnModelRefresh()
+    {
+        try
+        {
+            Logs.Debug("[SDcppExtension] Model refresh event received");
+            // Backend will re-scan models on next init/generation
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcppExtension] Error handling model refresh: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Called when model paths are changed in settings
+    /// </summary>
+    private void OnModelPathsChanged()
+    {
+        try
+        {
+            Logs.Debug("[SDcppExtension] Model paths changed event received");
+            // Update Flux component search paths if needed
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcppExtension] Error handling model paths change: {ex.Message}");
         }
     }
 
