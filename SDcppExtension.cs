@@ -2,6 +2,7 @@ using Hartsy.Extensions.SDcppExtension.SwarmBackends;
 using Hartsy.Extensions.SDcppExtension.WebAPI;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
+using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using System.IO;
 
@@ -83,8 +84,11 @@ public class SDcppExtension : Extension
         {
             Logs.Info($"[SDcppExtension] Initializing SD.cpp extension v{Version}");
 
+            // Register SD.cpp-specific parameters
+            RegisterParameters();
+
             // Register the SD.cpp backend type
-            Program.Backends.RegisterBackendType<SDcppBackend>("sdcpp", "SD.cpp Backend", 
+            Program.Backends.RegisterBackendType<SDcppBackend>("sdcpp", "SD.cpp Backend",
                 "A backend powered by stable-diffusion.cpp for fast, efficient image generation.", true);
 
             // Register API endpoints
@@ -96,6 +100,107 @@ public class SDcppExtension : Extension
         {
             Logs.Error($"[SDcppExtension] Failed to initialize extension: {ex.Message}");
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Registers SD.cpp-specific parameters with SwarmUI's parameter system.
+    /// These parameters will be available in the UI when using the SD.cpp backend.
+    /// </summary>
+    private void RegisterParameters()
+    {
+        try
+        {
+            Logs.Debug("[SDcppExtension] Registering parameters");
+
+            // Create parameter groups for organization
+            T2IParamGroup sdcppGroup = new("SD.cpp", Toggles: true, Open: false, OrderPriority: 5);
+            T2IParamGroup fluxGroup = new("Flux", Toggles: false, Open: false, OrderPriority: 6);
+
+            // SD.cpp general parameters
+            T2IParamTypes.Register<bool>(new(
+                "VAE Tiling",
+                "Enable VAE tiling to reduce memory usage during generation. Recommended for limited VRAM systems.",
+                "true",
+                Group: sdcppGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 1
+            ));
+
+            T2IParamTypes.Register<bool>(new(
+                "VAE on CPU",
+                "Run VAE decoder on CPU instead of GPU. Useful if running out of VRAM.",
+                "false",
+                Group: sdcppGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 2
+            ));
+
+            T2IParamTypes.Register<bool>(new(
+                "CLIP on CPU",
+                "Run CLIP text encoder on CPU instead of GPU. Useful if running out of VRAM.",
+                "false",
+                Group: sdcppGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 3
+            ));
+
+            T2IParamTypes.Register<bool>(new(
+                "Flash Attention",
+                "Enable Flash Attention optimization. May reduce quality slightly but saves memory.",
+                "false",
+                Group: sdcppGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 4
+            ));
+
+            // Flux-specific parameters
+            T2IParamTypes.Register<string>(new(
+                "Flux Quantization",
+                "Quantization level for Flux models. q8_0=best quality (12GB VRAM), q4_0=balanced (6-8GB), q2_k=low VRAM (4GB).",
+                "q8_0",
+                GetValues: (_) => ["q8_0", "q4_0", "q4_k", "q3_k", "q2_k"],
+                Group: fluxGroup,
+                FeatureFlag: "flux",
+                OrderPriority: 1
+            ));
+
+            T2IParamTypes.Register<bool>(new(
+                "Auto Convert Flux to GGUF",
+                "Automatically convert Flux models to GGUF format if needed. Conversion takes 5-15 minutes but only happens once.",
+                "true",
+                Group: fluxGroup,
+                FeatureFlag: "flux",
+                OrderPriority: 2
+            ));
+
+            T2IParamTypes.Register<int>(new(
+                "Flux Dev Steps",
+                "Default sampling steps for Flux-dev models. 20+ recommended for quality.",
+                "20",
+                Min: 1, Max: 100, Step: 1,
+                ViewType: ParamViewType.SLIDER,
+                Group: fluxGroup,
+                FeatureFlag: "flux",
+                OrderPriority: 3
+            ));
+
+            T2IParamTypes.Register<int>(new(
+                "Flux Schnell Steps",
+                "Default sampling steps for Flux-schnell models. 4 recommended for speed.",
+                "4",
+                Min: 1, Max: 20, Step: 1,
+                ViewType: ParamViewType.SLIDER,
+                Group: fluxGroup,
+                FeatureFlag: "flux",
+                OrderPriority: 4
+            ));
+
+            Logs.Debug("[SDcppExtension] Parameters registered successfully");
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcppExtension] Error registering parameters: {ex.Message}");
         }
     }
 

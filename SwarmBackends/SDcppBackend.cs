@@ -1,5 +1,4 @@
 using FreneticUtilities.FreneticDataSyntax;
-using Hartsy.Extensions.SDcppExtension.Config;
 using Hartsy.Extensions.SDcppExtension.Utils;
 using SwarmUI.Backends;
 using SwarmUI.Core;
@@ -21,47 +20,66 @@ public class SDcppBackend : AbstractT2IBackend
 {
     /// <summary>
     /// Configuration settings for the SD.cpp backend, required by SwarmUI's backend registration system.
+    /// SD.cpp will be automatically downloaded and configured based on your device selection.
     /// </summary>
     public class SDcppBackendSettings : AutoConfiguration
     {
-        [ConfigComment("Path to the stable-diffusion.cpp executable (sd.exe on Windows, sd on Linux/Mac)")]
-        public string ExecutablePath = "sd.exe";
+        [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.\nNote: Flux models may not work reliably with Vulkan - use CUDA or CPU instead.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)"])]
+        public string Device = "cpu";
 
-        [ConfigComment("Number of threads to use during computation (0 for auto-detect)")]
-        public int Threads = 4;
+        [ConfigComment("Number of CPU threads to use during generation (0 for auto-detect based on your CPU).")]
+        public int Threads = 0;
 
-        [ConfigComment("GPU device to use (auto, cpu, cuda, metal, vulkan, opencl, sycl)")]
-        public string Device = "auto";
-
-        [ConfigComment("Weight precision type (f32, f16, q8_0, q4_0, q4_1, q5_0, q5_1, q2_k, q3_k, q4_k, q5_k, q6_k)")]
+        [ConfigComment("Model precision type for standard SD models. Lower precision uses less memory but may reduce quality.\nNote: Flux models require GGUF conversion - use FluxQuantization setting instead.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["f32", "f16", "q8_0", "q4_0"], ManualNames = ["f32 (Highest Quality)", "f16 (Recommended)", "q8_0 (Lower Memory)", "q4_0 (Lowest Memory)"])]
         public string WeightType = "f16";
 
-        [ConfigComment("Enable VAE tiling to reduce memory usage")]
-        public bool VAETiling = false;
+        [ConfigComment("Quantization level for Flux models (GGUF format).\n'q8_0' provides best quality with ~12GB VRAM.\n'q4_0' is good for 6-8GB VRAM.\n'q2_k' can run on 4GB VRAM but with quality loss.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["q8_0", "q4_0", "q4_k", "q3_k", "q2_k"], ManualNames = ["q8_0 (Best Quality, 12GB VRAM)", "q4_0 (Balanced, 6-8GB VRAM)", "q4_k (Balanced Alt)", "q3_k (Low VRAM, 4-6GB)", "q2_k (Minimal VRAM, 4GB)"])]
+        public string FluxQuantization = "q8_0";
 
-        [ConfigComment("Run VAE on CPU instead of GPU")]
+        [ConfigComment("Automatically convert Flux models to GGUF format if needed.\nFlux models MUST be in GGUF format to work properly with SD.cpp.")]
+        public bool AutoConvertFluxToGGUF = true;
+
+        [ConfigComment("Default number of sampling steps for Flux-dev models (20+ recommended for quality).")]
+        public int FluxDevSteps = 20;
+
+        [ConfigComment("Default number of sampling steps for Flux-schnell models (4 recommended for speed).")]
+        public int FluxSchnellSteps = 4;
+
+        [ConfigComment("Enable VAE tiling to reduce memory usage. Recommended for systems with limited RAM/VRAM.")]
+        public bool VAETiling = true;
+
+        [ConfigComment("Keep VAE processing on CPU instead of GPU. Useful if you're running out of VRAM.")]
         public bool VAEOnCPU = false;
 
-        [ConfigComment("Run CLIP text encoder on CPU instead of GPU")]
+        [ConfigComment("Keep CLIP text encoder on CPU instead of GPU. Useful if you're running out of VRAM.")]
         public bool CLIPOnCPU = false;
 
-        [ConfigComment("Enable Flash Attention optimization")]
+        [ConfigComment("Enable Flash Attention optimization. May reduce quality slightly but saves memory.")]
         public bool FlashAttention = false;
 
-        [ConfigComment("Enable debug mode for verbose logging")]
+        [ConfigComment("Maximum time to wait for image generation before timing out (in seconds).")]
+        public int ProcessTimeoutSeconds = 600;
+
+        [ConfigComment("Enable debug logging to help troubleshoot issues.")]
         public bool DebugMode = false;
 
-        [ConfigComment("Timeout for SD.cpp process operations in seconds")]
-        public int ProcessTimeoutSeconds = 300;
+        [ConfigComment("Optional: Override path to Flux VAE file (ae.safetensors). Leave empty for auto-detection.")]
+        public string FluxVAEPath = "";
 
-        [ConfigComment("Working directory for temporary files (empty for system temp)")]
-        public string WorkingDirectory = "";
+        [ConfigComment("Optional: Override path to Flux CLIP-L encoder (clip_l.safetensors). Leave empty for auto-detection.")]
+        public string FluxCLIPLPath = "";
 
-        [ConfigComment("Default model path to use if none specified")]
-        public string DefaultModelPath = "";
+        [ConfigComment("Optional: Override path to Flux T5-XXL encoder (t5xxl_fp16.safetensors). Leave empty for auto-detection.")]
+        public string FluxT5XXLPath = "";
 
-        [ConfigComment("Default VAE path to use if none specified")]
-        public string DefaultVAEPath = "";
+        // Internal settings - not exposed to user
+        internal string ExecutablePath = "";
+        internal string WorkingDirectory = "";
+        internal string DefaultModelPath = "";
+        internal string DefaultVAEPath = "";
     }
     /// <summary>Configuration settings controlling SD.cpp behavior, paths, and optimization flags</summary>
     public SDcppBackendSettings Settings => SettingsRaw as SDcppBackendSettings;
