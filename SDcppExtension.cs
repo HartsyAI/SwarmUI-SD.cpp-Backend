@@ -18,6 +18,9 @@ public class SDcppExtension : Extension
     /// <summary>Extension version for compatibility tracking</summary>
     public static new readonly string Version = "0.1.0";
 
+    /// <summary>SD.cpp sampler parameter reference</summary>
+    public static T2IRegisteredParam<string> SamplerParam;
+
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
     /// This runs before the main UI is ready, so we only register static assets here.
@@ -50,7 +53,11 @@ public class SDcppExtension : Extension
         try
         {
             Logs.Debug("[SDcppExtension] Model refresh event received");
-            // Backend will re-scan models on next init/generation
+            // Refresh all running SD.cpp backends
+            foreach (var backend in Program.Backends.RunningBackendsOfType<SDcppBackend>())
+            {
+                backend.RefreshModels();
+            }
         }
         catch (Exception ex)
         {
@@ -66,7 +73,11 @@ public class SDcppExtension : Extension
         try
         {
             Logs.Debug("[SDcppExtension] Model paths changed event received");
-            // Update Flux component search paths if needed
+            // Refresh all running SD.cpp backends since paths have changed
+            foreach (var backend in Program.Backends.RunningBackendsOfType<SDcppBackend>())
+            {
+                backend.RefreshModels();
+            }
         }
         catch (Exception ex)
         {
@@ -155,25 +166,6 @@ public class SDcppExtension : Extension
             ));
 
             // Flux-specific parameters
-            T2IParamTypes.Register<string>(new(
-                "Flux Quantization",
-                "Quantization level for Flux models. q8_0=best quality (12GB VRAM), q4_0=balanced (6-8GB), q2_k=low VRAM (4GB).",
-                "q8_0",
-                GetValues: (_) => ["q8_0", "q4_0", "q4_k", "q3_k", "q2_k"],
-                Group: fluxGroup,
-                FeatureFlag: "flux",
-                OrderPriority: 1
-            ));
-
-            T2IParamTypes.Register<bool>(new(
-                "Auto Convert Flux to GGUF",
-                "Automatically convert Flux models to GGUF format if needed. Conversion takes 5-15 minutes but only happens once.",
-                "true",
-                Group: fluxGroup,
-                FeatureFlag: "flux",
-                OrderPriority: 2
-            ));
-
             T2IParamTypes.Register<int>(new(
                 "Flux Dev Steps",
                 "Default sampling steps for Flux-dev models. 20+ recommended for quality.",
@@ -182,7 +174,7 @@ public class SDcppExtension : Extension
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
                 FeatureFlag: "flux",
-                OrderPriority: 3
+                OrderPriority: 1
             ));
 
             T2IParamTypes.Register<int>(new(
@@ -193,7 +185,23 @@ public class SDcppExtension : Extension
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
                 FeatureFlag: "flux",
-                OrderPriority: 4
+                OrderPriority: 2
+            ));
+
+            // Sampler and Scheduler parameters for SD.cpp
+            SamplerParam = T2IParamTypes.Register<string>(new(
+                "SD.cpp Sampler",
+                "Sampling method for SD.cpp backend. Euler is recommended for Flux, euler_a for SD/SDXL.",
+                "euler",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: T2IParamTypes.GroupSampling,
+                OrderPriority: -5,
+                GetValues: (_) => new List<string>
+                {
+                    "euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2",
+                    "ipndm", "ipndm_v", "lcm"
+                }
             ));
 
             Logs.Debug("[SDcppExtension] Parameters registered successfully");

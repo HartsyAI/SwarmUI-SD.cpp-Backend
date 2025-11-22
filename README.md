@@ -181,16 +181,6 @@ CLIPOnCPU: false
 - Offload processing to CPU to save VRAM
 - Enable if you're running out of memory
 
-### Component Override Paths
-
-```
-FluxVAEPath: ""
-FluxCLIPLPath: ""
-FluxT5XXLPath: ""
-```
-- Optional: Specify exact paths to Flux components
-- Leave empty for automatic discovery
-
 ## Usage Tips
 
 ### Flux Best Practices
@@ -227,9 +217,9 @@ Place LoRA files in: `SwarmUI/Models/Lora/`
 
 **Solution:**
 1. Download missing components (links above)
-2. Place in model directory or SwarmUI/Models/VAE or /CLIP
-3. Check logs for search paths
-4. Use override settings if needed
+2. Place in SwarmUI/Models/VAE or SwarmUI/Models/clip folders
+3. Refresh models in SwarmUI to detect new components
+4. Check logs to verify components were discovered
 
 ### "GGUF conversion failed"
 
@@ -336,7 +326,6 @@ SwarmUI-SD.cpp-Backend/
 ├── Utils/
 │   ├── SDcppProcessManager.cs  # CLI execution
 │   ├── SDcppDownloadManager.cs # Binary downloads
-│   ├── FluxModelComponents.cs  # Component discovery
 │   └── GGUFConverter.cs        # Model conversion
 └── WebAPI/
     └── SDcppAPI.cs             # API endpoints

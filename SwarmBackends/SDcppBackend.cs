@@ -39,9 +39,6 @@ public class SDcppBackend : AbstractT2IBackend
         [ManualSettingsOptions(Impl = null, Vals = ["q8_0", "q4_0", "q4_k", "q3_k", "q2_k"], ManualNames = ["q8_0 (Best Quality, 12GB VRAM)", "q4_0 (Balanced, 6-8GB VRAM)", "q4_k (Balanced Alt)", "q3_k (Low VRAM, 4-6GB)", "q2_k (Minimal VRAM, 4GB)"])]
         public string FluxQuantization = "q8_0";
 
-        [ConfigComment("Automatically convert Flux models to GGUF format if needed.\nFlux models MUST be in GGUF format to work properly with SD.cpp.")]
-        public bool AutoConvertFluxToGGUF = true;
-
         [ConfigComment("Default number of sampling steps for Flux-dev models (20+ recommended for quality).")]
         public int FluxDevSteps = 20;
 
@@ -66,20 +63,9 @@ public class SDcppBackend : AbstractT2IBackend
         [ConfigComment("Enable debug logging to help troubleshoot issues.")]
         public bool DebugMode = false;
 
-        [ConfigComment("Optional: Override path to Flux VAE file (ae.safetensors). Leave empty for auto-detection.")]
-        public string FluxVAEPath = "";
-
-        [ConfigComment("Optional: Override path to Flux CLIP-L encoder (clip_l.safetensors). Leave empty for auto-detection.")]
-        public string FluxCLIPLPath = "";
-
-        [ConfigComment("Optional: Override path to Flux T5-XXL encoder (t5xxl_fp16.safetensors). Leave empty for auto-detection.")]
-        public string FluxT5XXLPath = "";
-
         // Internal settings - not exposed to user
         internal string ExecutablePath = "";
         internal string WorkingDirectory = "";
-        internal string DefaultModelPath = "";
-        internal string DefaultVAEPath = "";
     }
     /// <summary>Configuration settings controlling SD.cpp behavior, paths, and optimization flags</summary>
     public SDcppBackendSettings Settings => SettingsRaw as SDcppBackendSettings;
@@ -93,11 +79,6 @@ public class SDcppBackend : AbstractT2IBackend
     /// Currently loaded model architecture type (SD15, SDXL, Flux, etc.)
     /// </summary>
     public string CurrentModelArchitecture { get; set; } = "unknown";
-
-    /// <summary>
-    /// Flux model components (for multi-component architecture)
-    /// </summary>
-    public FluxModelComponents CurrentFluxComponents { get; set; } = null;
 
     /// <summary>
     /// Features supported by this backend - includes txt2img, img2img, inpainting, and various samplers.
@@ -128,8 +109,7 @@ public class SDcppBackend : AbstractT2IBackend
                     features.Add("flux");
                     features.Add("flux-dev");
                     // LoRA only works with q8_0 quantization for Flux
-                    if (Settings.FluxQuantization == "q8_0")
-                        features.Add("lora");
+                    features.Add("lora");
                     break;
 
                 case "sd3":
@@ -179,7 +159,43 @@ public class SDcppBackend : AbstractT2IBackend
     }
 
     /// <summary>
-    /// Initializes the SD.cpp backend by loading configuration, validating the executable,
+    /// Validates the configured device against available hardware using NvidiaUtil and adjusts Settings.Device if needed.
+    /// Helps fail fast when CUDA is requested but no NVIDIA GPU is present.
+    /// </summary>
+    private void ValidateAndConfigureDevice()
+    {
+        try
+        {
+            string configured = (Settings.Device ?? "cpu").ToLowerInvariant();
+            var nvidiaInfo = NvidiaUtil.QueryNvidia();
+
+            if (configured == "cuda")
+            {
+                if (nvidiaInfo == null || nvidiaInfo.Length == 0)
+                {
+                    Logs.Warning("[SDcpp] Device is set to CUDA but no NVIDIA GPU was detected via nvidia-smi. Falling back to CPU for SD.cpp backend.");
+                    AddLoadStatus("No NVIDIA GPU detected by nvidia-smi. Falling back to CPU device for SD.cpp backend.");
+                    Settings.Device = "cpu";
+                }
+                else
+                {
+                    var primary = nvidiaInfo[0];
+                    Logs.Info($"[SDcpp] Using CUDA device on NVIDIA GPU: {primary.GPUName} (driver {primary.DriverVersion})");
+                }
+            }
+            else if (configured == "cpu" && nvidiaInfo != null && nvidiaInfo.Length > 0)
+            {
+                Logs.Info("[SDcpp] NVIDIA GPU detected but SD.cpp backend device is set to CPU. For best performance, change the device to 'GPU (CUDA - NVIDIA)' in backend settings.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcpp] Error while validating device configuration: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Initializes the SD.cpp backend by loading configuration, validating the executable and runtime,
     /// and setting up the process manager. Called once during SwarmUI startup.
     /// </summary>
     public override async Task Init()
@@ -188,6 +204,9 @@ public class SDcppBackend : AbstractT2IBackend
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
             AddLoadStatus("Starting SD.cpp backend initialization...");
+
+            // Validate configured device against available hardware
+            ValidateAndConfigureDevice();
 
             // Ensure SD.cpp is available, download device-specific binary if needed
             AddLoadStatus($"Checking for SD.cpp binary (device: {Settings.Device})...");
@@ -201,11 +220,43 @@ public class SDcppBackend : AbstractT2IBackend
             }
 
             ProcessManager = new SDcppProcessManager(Settings);
-            if (!ProcessManager.ValidateExecutable())
+            AddLoadStatus("Validating SD.cpp executable and runtime...");
+            if (!ProcessManager.ValidateRuntime(out string runtimeError))
             {
-                Status = BackendStatus.ERRORED;
-                Logs.Error("[SDcpp] SD.cpp executable validation failed");
-                return;
+                // If CUDA runtime validation failed, try falling back to CPU
+                if (string.Equals(Settings.Device, "cuda", StringComparison.OrdinalIgnoreCase) && runtimeError.Contains("CUDA"))
+                {
+                    Logs.Warning($"[SDcpp] CUDA runtime validation failed. Attempting fallback to CPU device...");
+                    AddLoadStatus("CUDA runtime not found. Falling back to CPU device...");
+
+                    // Try CPU fallback - pass empty string to force download of CPU-specific binary
+                    Settings.Device = "cpu";
+                    string cpuExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable("", "cpu");
+                    if (!string.IsNullOrEmpty(cpuExecutablePath) && File.Exists(cpuExecutablePath))
+                    {
+                        Settings.ExecutablePath = cpuExecutablePath;
+                        Logs.Info($"[SDcpp] Updated executable path to CPU version: {cpuExecutablePath}");
+                    }
+
+                    ProcessManager = new SDcppProcessManager(Settings);
+                    if (!ProcessManager.ValidateRuntime(out string cpuRuntimeError))
+                    {
+                        Status = BackendStatus.ERRORED;
+                        Logs.Error($"[SDcpp] CPU fallback also failed: {cpuRuntimeError}");
+                        AddLoadStatus("SD.cpp backend disabled: Could not initialize CUDA or CPU device.");
+                        return;
+                    }
+
+                    Logs.Info("[SDcpp] Successfully fell back to CPU device");
+                    AddLoadStatus("Using CPU device (CUDA runtime not available)");
+                }
+                else
+                {
+                    Status = BackendStatus.ERRORED;
+                    Logs.Error($"[SDcpp] SD.cpp runtime validation failed: {runtimeError}");
+                    AddLoadStatus("SD.cpp backend disabled: " + runtimeError);
+                    return;
+                }
             }
 
             // Populate models dictionary for SwarmUI's backend matching system
@@ -230,11 +281,21 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
+            // Ensure Models dictionary is initialized
+            Models ??= new ConcurrentDictionary<string, List<string>>();
+
+            // Check if model sets are initialized
+            if (Program.T2IModelSets == null)
+            {
+                Logs.Debug("[SDcpp] Model sets not yet initialized, skipping model population");
+                return;
+            }
+
             // Populate Stable Diffusion models
-            if (Program.T2IModelSets.TryGetValue("Stable-Diffusion", out var sdModelSet))
+            if (Program.T2IModelSets.TryGetValue("Stable-Diffusion", out var sdModelSet) && sdModelSet?.Models != null)
             {
                 Models["Stable-Diffusion"] = sdModelSet.Models.Values
-                    .Where(IsSupportedBySDcpp)
+                    .Where(m => m != null && IsSupportedBySDcpp(m))
                     .Select(m => m.Name)
                     .ToList();
 
@@ -242,20 +303,21 @@ public class SDcppBackend : AbstractT2IBackend
             }
 
             // Populate LoRA models
-            if (Program.T2IModelSets.TryGetValue("Lora", out var loraModelSet))
+            if (Program.T2IModelSets.TryGetValue("Lora", out var loraModelSet) && loraModelSet?.Models != null)
             {
-                Models["Lora"] = loraModelSet.Models.Values
+                Models["LoRA"] = loraModelSet.Models.Values
+                    .Where(m => m != null)
                     .Select(m => m.Name)
                     .ToList();
 
-                Logs.Debug($"[SDcpp] Found {Models["Lora"].Count} LoRA models");
+                Logs.Debug($"[SDcpp] Found {Models["LoRA"].Count} LoRA models");
             }
 
             // Populate VAE models
-            if (Program.T2IModelSets.TryGetValue("VAE", out var vaeModelSet))
+            if (Program.T2IModelSets.TryGetValue("VAE", out var vaeModelSet) && vaeModelSet?.Models != null)
             {
                 Models["VAE"] = vaeModelSet.Models.Values
-                    .Where(m => IsSupportedVAE(m))
+                    .Where(m => m != null && IsSupportedVAE(m))
                     .Select(m => m.Name)
                     .ToList();
 
@@ -265,6 +327,24 @@ public class SDcppBackend : AbstractT2IBackend
         catch (Exception ex)
         {
             Logs.Warning($"[SDcpp] Error populating models dictionary: {ex.Message}");
+            Logs.Debug($"[SDcpp] Stack trace: {ex.StackTrace}");
+        }
+    }
+
+    /// <summary>
+    /// Refreshes the models dictionary when SwarmUI detects model changes.
+    /// Called by the extension when model refresh events are triggered.
+    /// </summary>
+    public void RefreshModels()
+    {
+        try
+        {
+            Logs.Debug("[SDcpp] Refreshing models list");
+            PopulateModelsDict();
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcpp] Error refreshing models: {ex.Message}");
         }
     }
 
@@ -405,7 +485,7 @@ public class SDcppBackend : AbstractT2IBackend
     /// <summary>
     /// Loads the specified model for use in generation. For SD.cpp, this sets the current model name
     /// as the model path will be passed to the CLI process during generation execution.
-    /// For Flux models, also discovers required components and handles GGUF conversion.
+    /// SwarmUI manages all model components (VAE, CLIP, T5XXL) via its parameter system.
     /// </summary>
     /// <param name="model">The model to load from SwarmUI's model registry</param>
     /// <param name="input">Generation parameters that may influence model loading</param>
@@ -434,112 +514,12 @@ public class SDcppBackend : AbstractT2IBackend
             CurrentModelArchitecture = DetectModelArchitecture(model);
             CurrentModelName = model.Name;
 
-            Logs.Info($"[SDcpp] Detected architecture: {CurrentModelArchitecture}");
-
-            // Handle Flux-specific loading
-            if (CurrentModelArchitecture == "flux")
-            {
-                return await LoadFluxModel(model);
-            }
-
             Logs.Info($"[SDcpp] Model loaded successfully: {model.Name} (Architecture: {CurrentModelArchitecture})");
             return true;
         }
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error loading model {model.Name}: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Loads a Flux model, handling GGUF conversion and component discovery.
-    /// </summary>
-    /// <param name="model">Flux model to load</param>
-    /// <returns>True if all components found and model ready, false otherwise</returns>
-    private async Task<bool> LoadFluxModel(T2IModel model)
-    {
-        try
-        {
-            Logs.Info($"[SDcpp] Loading Flux model: {model.Name}");
-
-            string modelPath = model.RawFilePath;
-
-            // Check if model needs GGUF conversion
-            if (!GGUFConverter.IsGGUFFormat(modelPath))
-            {
-                Logs.Warning($"[SDcpp] Flux model is not in GGUF format: {modelPath}");
-
-                if (Settings.AutoConvertFluxToGGUF)
-                {
-                    Logs.Info($"[SDcpp] Auto-converting Flux model to GGUF format ({Settings.FluxQuantization})...");
-                    Logs.Info($"[SDcpp] This may take 5-15 minutes depending on model size.");
-
-                    var (success, outputPath, errorMessage) = await GGUFConverter.ConvertToGGUF(
-                        Settings.ExecutablePath,
-                        modelPath,
-                        Settings.FluxQuantization,
-                        debugMode: Settings.DebugMode
-                    );
-
-                    if (!success)
-                    {
-                        Logs.Error($"[SDcpp] GGUF conversion failed: {errorMessage}");
-                        Logs.Error($"[SDcpp] Please convert the model manually or set AutoConvertFluxToGGUF=false");
-                        return false;
-                    }
-
-                    modelPath = outputPath;
-                    Logs.Info($"[SDcpp] Conversion successful! Using: {modelPath}");
-                }
-                else
-                {
-                    Logs.Error($"[SDcpp] Flux models require GGUF format. Please convert using:");
-                    Logs.Error($"[SDcpp] {Settings.ExecutablePath} -M convert -m \"{modelPath}\" -o \"output.gguf\" --type {Settings.FluxQuantization}");
-                    Logs.Error($"[SDcpp] Or enable AutoConvertFluxToGGUF in settings.");
-                    return false;
-                }
-            }
-            else
-            {
-                Logs.Info($"[SDcpp] Model is already in GGUF format");
-            }
-
-            // Discover Flux components
-            Logs.Info($"[SDcpp] Discovering Flux model components...");
-            CurrentFluxComponents = FluxModelComponents.DiscoverComponents(
-                model,
-                Settings.FluxVAEPath,
-                Settings.FluxCLIPLPath,
-                Settings.FluxT5XXLPath
-            );
-
-            // Log component paths
-            CurrentFluxComponents.LogComponentPaths();
-
-            // Validate all components exist
-            if (!CurrentFluxComponents.IsComplete)
-            {
-                Logs.Error($"[SDcpp] Missing required Flux components!");
-                Logs.Error(CurrentFluxComponents.GetMissingComponentsMessage());
-                return false;
-            }
-
-            if (!CurrentFluxComponents.ValidateComponentsExist())
-            {
-                Logs.Error($"[SDcpp] Component validation failed!");
-                return false;
-            }
-
-            // Update the diffusion model path to use the potentially converted GGUF version
-            CurrentFluxComponents.DiffusionModelPath = modelPath;
-
-            Logs.Info($"[SDcpp] Flux model loaded successfully with all components");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Logs.Error($"[SDcpp] Error loading Flux model: {ex.Message}");
             return false;
         }
     }
@@ -610,6 +590,100 @@ public class SDcppBackend : AbstractT2IBackend
         catch (Exception ex)
         {
             Logs.Warning($"[SDcpp] Error during Flux parameter validation: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Executes image generation with live progress updates sent to the user.
+    /// Overrides the default GenerateLive to provide real-time feedback during generation.
+    /// </summary>
+    /// <param name="user_input">Complete generation parameters</param>
+    /// <param name="batchId">Unique identifier for this batch</param>
+    /// <param name="takeOutput">Callback to send progress updates and final images</param>
+    public override async Task GenerateLive(T2IParamInput user_input, string batchId, Action<object> takeOutput)
+    {
+        try
+        {
+            if (ProcessManager == null)
+            {
+                throw new InvalidOperationException("Process manager not initialized");
+            }
+
+            Logs.Info("[SDcpp] Starting live image generation");
+
+            // Validate Flux-specific parameters if using Flux model
+            bool isFluxModel = CurrentModelArchitecture == "flux";
+            if (isFluxModel)
+            {
+                ValidateFluxParameters(user_input);
+            }
+
+            // Create temporary output directory
+            string tempDir = Path.Combine(Path.GetTempPath(), "sdcpp_output", Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempDir);
+
+            try
+            {
+                // Build parameters for SD.cpp
+                Dictionary<string, object> parameters = BuildGenerationParameters(user_input, tempDir);
+
+                if (Settings.DebugMode)
+                {
+                    Logs.Debug($"[SDcpp] Generation parameters: {string.Join(", ", parameters.Select(p => $"{p.Key}={p.Value}"))}");
+                }
+
+                long startTime = Environment.TickCount64;
+
+                // Execute SD.cpp with live progress updates
+                (bool success, string output, string error) = await ProcessManager.ExecuteWithProgressAsync(
+                    parameters,
+                    isFluxModel,
+                    progress =>
+                    {
+                        // Send progress update to UI
+                        takeOutput(new Newtonsoft.Json.Linq.JObject
+                        {
+                            ["preview_progress"] = progress
+                        });
+                    });
+
+                long genTime = Environment.TickCount64 - startTime;
+
+                if (!success)
+                {
+                    Logs.Error($"[SDcpp] Generation failed: {error}");
+                    throw new Exception($"SD.cpp generation failed: {error}");
+                }
+
+                // Collect generated images
+                Image[] images = await CollectGeneratedImages(tempDir, user_input);
+
+                Logs.Info($"[SDcpp] Generated {images.Length} images successfully in {genTime}ms");
+
+                // Send final images to user
+                foreach (Image img in images)
+                {
+                    takeOutput(img);
+                }
+            }
+            finally
+            {
+                // Cleanup temporary directory
+                try
+                {
+                    if (Directory.Exists(tempDir))
+                        Directory.Delete(tempDir, true);
+                }
+                catch (Exception ex)
+                {
+                    Logs.Warning($"[SDcpp] Failed to cleanup temp directory: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"[SDcpp] Generation error: {ex.Message}");
+            throw;
         }
     }
 
@@ -710,8 +784,9 @@ public class SDcppBackend : AbstractT2IBackend
             // Check for LoRA syntax in prompt
             if (prompt.Contains("<lora:"))
             {
-                // Extract LoRA directory if needed
-                string loraDir = Path.Combine(Program.DataDir, "Models", "Lora");
+                // Use SwarmUI's configured LoRA directory
+                string loraFolder = Program.ServerSettings.Paths.SDLoraFolder.Split(';')[0];
+                string loraDir = Utilities.CombinePathWithAbsolute(Program.ServerSettings.Paths.ActualModelRoot, loraFolder);
                 if (Directory.Exists(loraDir))
                 {
                     parameters["lora_model_dir"] = loraDir;
@@ -765,86 +840,161 @@ public class SDcppBackend : AbstractT2IBackend
             parameters["seed"] = seed;
 
         // Map SwarmUI sampler to SD.cpp sampling method
-        string swarmSampler = "euler"; // Default for Flux, euler_a for SD
+        // Default based on model architecture
+        string swarmSampler = isFluxModel ? "euler" : "euler_a";
 
-        // Check if there's a sampler parameter - use reflection to avoid obsolete warning
-        // This is a temporary workaround until we have proper sampler parameter access
-        try
+        // Use registered sampler parameter if available
+        if (SDcppExtension.SamplerParam != null && input.TryGet(SDcppExtension.SamplerParam, out string userSampler))
         {
-            var samplerField = input.GetType().GetProperty("Sampler");
-            if (samplerField != null)
-            {
-                var samplerValue = samplerField.GetValue(input);
-                if (samplerValue != null)
-                {
-                    swarmSampler = samplerValue.ToString();
-                }
-            }
-        }
-        catch
-        {
-            // Use default based on model type
-            swarmSampler = isFluxModel ? "euler" : "euler_a";
+            swarmSampler = userSampler;
         }
 
-        if (!string.IsNullOrEmpty(swarmSampler))
+        // Flux works best with euler sampler - override if needed
+        if (isFluxModel && swarmSampler != "euler")
         {
-            // Map SwarmUI sampler names to SD.cpp sampling methods
-            string sdcppSampler = swarmSampler.ToLowerInvariant() switch
-            {
-                "euler" => "euler",
-                "euler_a" or "euler_ancestral" => "euler_a",
-                "heun" => "heun",
-                "dpm_2" or "dpm2" => "dpm2",
-                "dpm_plus_plus_2s_ancestral" or "dpm++_2s_a" => "dpm++2s_a",
-                "dpm_plus_plus_2m" or "dpm++_2m" => "dpm++2m",
-                "dpm_plus_plus_2m_v2" or "dpm++_2mv2" => "dpm++2mv2",
-                "ddim" => "ddim_trailing",
-                "lcm" => "lcm",
-                _ => isFluxModel ? "euler" : "euler_a" // Default based on model
-            };
-
-            // Flux works best with euler sampler
-            if (isFluxModel && sdcppSampler != "euler")
-            {
-                Logs.Info($"[SDcpp] Flux works best with euler sampler (requested: {sdcppSampler})");
-                Logs.Info($"[SDcpp] Using euler sampler for optimal results");
-                sdcppSampler = "euler";
-            }
-
-            parameters["sampling_method"] = sdcppSampler;
-        }
-        else
-        {
-            parameters["sampling_method"] = isFluxModel ? "euler" : "euler_a";
+            Logs.Info($"[SDcpp] Flux works best with euler sampler (requested: {swarmSampler})");
+            Logs.Info($"[SDcpp] Using euler sampler for optimal results");
+            swarmSampler = "euler";
         }
 
-        // Model path - Flux uses multi-component architecture
+        parameters["sampling_method"] = swarmSampler;
+
+        // Model path - Flux and SD3 use multi-component architecture with separate encoders
+        bool isSD3Model = CurrentModelArchitecture == "sd3";
+        bool isMultiComponentModel = isFluxModel || isSD3Model;
+
         if (!string.IsNullOrEmpty(CurrentModelName))
         {
-            if (isFluxModel && CurrentFluxComponents != null)
-            {
-                // Flux multi-component parameters
-                parameters["diffusion_model"] = CurrentFluxComponents.DiffusionModelPath;
-                parameters["vae"] = CurrentFluxComponents.VAEPath;
-                parameters["clip_l"] = CurrentFluxComponents.CLIPLPath;
-                parameters["t5xxl"] = CurrentFluxComponents.T5XXLPath;
+            T2IModel mainModel = Program.T2IModelSets["Stable-Diffusion"].Models.Values
+                .FirstOrDefault(m => m.Name == CurrentModelName);
 
-                Logs.Debug($"[SDcpp] Using Flux components:");
-                Logs.Debug($"  Diffusion: {CurrentFluxComponents.DiffusionModelPath}");
-                Logs.Debug($"  VAE: {CurrentFluxComponents.VAEPath}");
-                Logs.Debug($"  CLIP-L: {CurrentFluxComponents.CLIPLPath}");
-                Logs.Debug($"  T5-XXL: {CurrentFluxComponents.T5XXLPath}");
+            if (isMultiComponentModel && mainModel != null)
+            {
+                // Multi-component parameters - use SwarmUI's parameter system
+                parameters["diffusion_model"] = mainModel.RawFilePath;
+                Logs.Info($"[SDcpp] Multi-component model detected: {(isFluxModel ? "Flux" : "SD3")}");
+                Logs.Info($"[SDcpp] Diffusion model path: {mainModel.RawFilePath}");
+
+                // VAE - Required for Flux, optional for SD3 (has built-in VAE)
+                if (input.TryGet(T2IParamTypes.VAE, out T2IModel vaeModel) && vaeModel != null && vaeModel.Name != "(none)")
+                {
+                    parameters["vae"] = vaeModel.RawFilePath;
+                    Logs.Debug($"[SDcpp] Using VAE: {vaeModel.Name}");
+                }
+                else if (isFluxModel)
+                {
+                    // Flux requires external VAE - try to find default
+                    var vaeModelSet = Program.T2IModelSets["VAE"];
+                    var defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("ae") && m.Name.EndsWith(".safetensors"));
+                    if (defaultVae != null)
+                    {
+                        parameters["vae"] = defaultVae.RawFilePath;
+                        Logs.Debug($"[SDcpp] Using default VAE: {defaultVae.Name}");
+                    }
+                }
+                // SD3 VAE is optional - uses built-in if not specified
+
+                // CLIP-G - Required for SD3, not used by Flux
+                if (isSD3Model)
+                {
+                    if (input.TryGet(T2IParamTypes.ClipGModel, out T2IModel clipGModel) && clipGModel != null)
+                    {
+                        parameters["clip_g"] = clipGModel.RawFilePath;
+                        Logs.Debug($"[SDcpp] Using CLIP-G: {clipGModel.Name}");
+                    }
+                    else
+                    {
+                        // Use default CLIP-G from SwarmUI's registry
+                        var clipModelSet = Program.T2IModelSets["Clip"];
+                        Logs.Debug($"[SDcpp] Searching for CLIP-G in registry with {clipModelSet.Models.Count} CLIP models");
+                        var defaultClipG = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("clip_g"));
+                        if (defaultClipG != null)
+                        {
+                            parameters["clip_g"] = defaultClipG.RawFilePath;
+                            Logs.Info($"[SDcpp] Using default CLIP-G: {defaultClipG.Name}");
+                        }
+                        else
+                        {
+                            Logs.Warning($"[SDcpp] CLIP-G not found in registry! Available models: {string.Join(", ", clipModelSet.Models.Values.Take(5).Select(m => m.Name))}");
+                        }
+                    }
+                }
+
+                // CLIP-L - Required for both Flux and SD3
+                if (input.TryGet(T2IParamTypes.ClipLModel, out T2IModel clipLModel) && clipLModel != null)
+                {
+                    parameters["clip_l"] = clipLModel.RawFilePath;
+                    Logs.Debug($"[SDcpp] Using CLIP-L: {clipLModel.Name}");
+                }
+                else
+                {
+                    // Use default CLIP-L from SwarmUI's registry
+                    var clipModelSet = Program.T2IModelSets["Clip"];
+                    var defaultClipL = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("clip_l"));
+                    if (defaultClipL != null)
+                    {
+                        parameters["clip_l"] = defaultClipL.RawFilePath;
+                        Logs.Info($"[SDcpp] Using default CLIP-L: {defaultClipL.Name}");
+                    }
+                    else
+                    {
+                        Logs.Warning($"[SDcpp] CLIP-L not found in registry!");
+                    }
+                }
+
+                // T5-XXL - Required for both Flux and SD3
+                if (input.TryGet(T2IParamTypes.T5XXLModel, out T2IModel t5xxlModel) && t5xxlModel != null)
+                {
+                    parameters["t5xxl"] = t5xxlModel.RawFilePath;
+                    Logs.Debug($"[SDcpp] Using T5-XXL: {t5xxlModel.Name}");
+                }
+                else
+                {
+                    // Use default T5-XXL from SwarmUI's registry
+                    var clipModelSet = Program.T2IModelSets["Clip"];
+                    var defaultT5 = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("t5xxl"));
+                    if (defaultT5 != null)
+                    {
+                        parameters["t5xxl"] = defaultT5.RawFilePath;
+                        Logs.Info($"[SDcpp] Using default T5-XXL: {defaultT5.Name}");
+                    }
+                    else
+                    {
+                        Logs.Warning($"[SDcpp] T5-XXL not found in registry!");
+                    }
+                }
+
+                // Validate required components
+                if (isFluxModel)
+                {
+                    if (!parameters.ContainsKey("vae") || !parameters.ContainsKey("clip_l") || !parameters.ContainsKey("t5xxl"))
+                    {
+                        Logs.Warning("[SDcpp] Missing Flux components! SwarmUI will auto-download them.");
+                        Logs.Warning("[SDcpp] Please ensure VAE/CLIP models are available in Models/VAE and Models/clip folders.");
+                    }
+                    else
+                    {
+                        Logs.Info("[SDcpp] All Flux components found successfully");
+                    }
+                }
+                else if (isSD3Model)
+                {
+                    if (!parameters.ContainsKey("clip_g") || !parameters.ContainsKey("clip_l") || !parameters.ContainsKey("t5xxl"))
+                    {
+                        Logs.Warning("[SDcpp] Missing SD3 components! SwarmUI will auto-download them.");
+                        Logs.Warning("[SDcpp] Please ensure CLIP models are available in Models/clip folder.");
+                        Logs.Info($"[SDcpp] Components status: clip_g={parameters.ContainsKey("clip_g")}, clip_l={parameters.ContainsKey("clip_l")}, t5xxl={parameters.ContainsKey("t5xxl")}");
+                    }
+                    else
+                    {
+                        Logs.Info("[SDcpp] All SD3 components found successfully");
+                    }
+                }
             }
-            else
+            else if (mainModel != null)
             {
                 // Standard SD model
-                T2IModel model = Program.T2IModelSets["Stable-Diffusion"].Models.Values
-                    .FirstOrDefault(m => m.Name == CurrentModelName);
-                if (model != null)
-                {
-                    parameters["model"] = model.RawFilePath;
-                }
+                parameters["model"] = mainModel.RawFilePath;
             }
         }
 
@@ -905,6 +1055,33 @@ public class SDcppBackend : AbstractT2IBackend
         }
 
         return [.. images];
+    }
+
+    /// <summary>
+    /// Validates if this backend can handle the given generation request.
+    /// Rejects requests that use features SD.cpp doesn't support.
+    /// </summary>
+    public override bool IsValidForThisBackend(T2IParamInput input)
+    {
+        // SD.cpp doesn't currently support ControlNet
+        foreach (var controlnet in T2IParamTypes.Controlnets)
+        {
+            if (input.TryGet(controlnet.Model, out T2IModel controlnetModel) && controlnetModel != null && controlnetModel.Name != "(none)")
+            {
+                Logs.Verbose($"[SDcpp] Rejecting request: ControlNet not supported by SD.cpp backend");
+                return false;
+            }
+        }
+
+        // SD.cpp doesn't currently support refiner models
+        if (input.TryGet(T2IParamTypes.RefinerMethod, out string refinerMethod) && !string.IsNullOrEmpty(refinerMethod) && refinerMethod != "none")
+        {
+            Logs.Verbose($"[SDcpp] Rejecting request: Refiner not supported by SD.cpp backend");
+            return false;
+        }
+
+        // Accept all other requests
+        return true;
     }
 
     /// <summary>Free memory</summary>
