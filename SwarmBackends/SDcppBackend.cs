@@ -2,6 +2,7 @@ using FreneticUtilities.FreneticDataSyntax;
 using Hartsy.Extensions.SDcppExtension.Utils;
 using SwarmUI.Backends;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using System.Diagnostics;
@@ -156,6 +157,110 @@ public class SDcppBackend : AbstractT2IBackend
     {
         Logs.Info($"[SDcpp] {message}");
         // TODO: If SwarmUI has a status reporting mechanism, use it here
+    }
+
+    /// <summary>Lock object for model downloads to prevent duplicate downloads.</summary>
+    private static readonly FreneticUtilities.FreneticToolkit.LockObject ModelDownloadLock = new();
+
+    /// <summary>
+    /// Ensures a required model file exists, downloading it if necessary.
+    /// Follows the same pattern as ComfyUI backend's RequireClipModel.
+    /// </summary>
+    /// <param name="modelType">Model type folder (e.g., "VAE", "Clip")</param>
+    /// <param name="fileName">Target filename (e.g., "Flux/ae.safetensors")</param>
+    /// <param name="url">Download URL</param>
+    /// <param name="hash">SHA256 hash for verification (optional)</param>
+    /// <returns>Full path to the model file, or null if download failed</returns>
+    private static string EnsureModelExists(string modelType, string fileName, string url, string hash = null)
+    {
+        var modelSet = Program.T2IModelSets[modelType];
+        
+        // Check if model already exists in registry
+        if (modelSet.Models.ContainsKey(fileName))
+        {
+            return modelSet.Models[fileName].RawFilePath;
+        }
+
+        // Also check without subfolder prefix
+        string baseName = Path.GetFileName(fileName);
+        var existing = modelSet.Models.Values.FirstOrDefault(m => 
+            m.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase) ||
+            m.Name.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            return existing.RawFilePath;
+        }
+
+        // Need to download - get the download folder
+        string downloadFolder = modelSet.FolderPaths[0];
+        string filePath = Path.Combine(downloadFolder, fileName);
+        string fileDir = Path.GetDirectoryName(filePath);
+
+        // Create subdirectory if needed
+        if (!string.IsNullOrEmpty(fileDir) && !Directory.Exists(fileDir))
+        {
+            Directory.CreateDirectory(fileDir);
+        }
+
+        // Check if file already exists on disk but not in registry
+        if (File.Exists(filePath))
+        {
+            Logs.Info($"[SDcpp] Found existing file at {filePath}, refreshing model list...");
+            Program.RefreshAllModelSets();
+            return filePath;
+        }
+
+        // Download the file
+        lock (ModelDownloadLock)
+        {
+            // Double-check after acquiring lock
+            if (File.Exists(filePath))
+            {
+                return filePath;
+            }
+
+            Logs.Info($"[SDcpp] Downloading {fileName}...");
+            Logs.Info($"[SDcpp] URL: {url}");
+            string tmpPath = $"{filePath}.tmp";
+
+            try
+            {
+                if (File.Exists(tmpPath))
+                {
+                    File.Delete(tmpPath);
+                }
+
+                double nextPerc = 0.1;
+                Utilities.DownloadFile(url, tmpPath, (bytes, total, perSec) =>
+                {
+                    double perc = bytes / (double)total;
+                    if (perc >= nextPerc)
+                    {
+                        double mbDownloaded = bytes / 1024.0 / 1024.0;
+                        double mbTotal = total / 1024.0 / 1024.0;
+                        double mbPerSec = perSec / 1024.0 / 1024.0;
+                        Logs.Info($"[SDcpp] {fileName}: {perc * 100:0.0}% ({mbDownloaded:0.1}/{mbTotal:0.1} MB, {mbPerSec:0.1} MB/s)");
+                        nextPerc = Math.Round(perc / 0.1) * 0.1 + 0.1;
+                    }
+                }, verifyHash: hash).Wait();
+
+                File.Move(tmpPath, filePath);
+                Logs.Info($"[SDcpp] Successfully downloaded {fileName}");
+
+                // Refresh model list so the new model is recognized
+                Program.RefreshAllModelSets();
+                return filePath;
+            }
+            catch (Exception ex)
+            {
+                Logs.Error($"[SDcpp] Failed to download {fileName}: {ex.Message}");
+                if (File.Exists(tmpPath))
+                {
+                    try { File.Delete(tmpPath); } catch { }
+                }
+                return null;
+            }
+        }
     }
 
     /// <summary>
@@ -879,17 +984,33 @@ public class SDcppBackend : AbstractT2IBackend
                 if (input.TryGet(T2IParamTypes.VAE, out T2IModel vaeModel) && vaeModel != null && vaeModel.Name != "(none)")
                 {
                     parameters["vae"] = vaeModel.RawFilePath;
-                    Logs.Debug($"[SDcpp] Using VAE: {vaeModel.Name}");
+                    Logs.Debug($"[SDcpp] Using user-specified VAE: {vaeModel.Name}");
                 }
                 else if (isFluxModel)
                 {
-                    // Flux requires external VAE - try to find default
+                    // Flux requires external VAE - try to find or auto-download
                     var vaeModelSet = Program.T2IModelSets["VAE"];
-                    var defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("ae") && m.Name.EndsWith(".safetensors"));
+                    var defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => 
+                        m.Name.Equals("ae.safetensors", StringComparison.OrdinalIgnoreCase) ||
+                        m.Name.EndsWith("ae.safetensors", StringComparison.OrdinalIgnoreCase) ||
+                        m.Name.Contains("flux", StringComparison.OrdinalIgnoreCase) && m.Name.Contains("ae", StringComparison.OrdinalIgnoreCase));
+                    
                     if (defaultVae != null)
                     {
                         parameters["vae"] = defaultVae.RawFilePath;
-                        Logs.Debug($"[SDcpp] Using default VAE: {defaultVae.Name}");
+                        Logs.Debug($"[SDcpp] Using existing VAE: {defaultVae.Name}");
+                    }
+                    else
+                    {
+                        // Auto-download Flux VAE (using same URL as CommonModels.cs "flux-ae")
+                        Logs.Info("[SDcpp] Flux VAE not found, auto-downloading...");
+                        string vaePath = EnsureModelExists("VAE", "Flux/ae.safetensors",
+                            "https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/flux_ae.safetensors",
+                            "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38");
+                        if (!string.IsNullOrEmpty(vaePath))
+                        {
+                            parameters["vae"] = vaePath;
+                        }
                     }
                 }
                 // SD3 VAE is optional - uses built-in if not specified
@@ -900,22 +1021,28 @@ public class SDcppBackend : AbstractT2IBackend
                     if (input.TryGet(T2IParamTypes.ClipGModel, out T2IModel clipGModel) && clipGModel != null)
                     {
                         parameters["clip_g"] = clipGModel.RawFilePath;
-                        Logs.Debug($"[SDcpp] Using CLIP-G: {clipGModel.Name}");
+                        Logs.Debug($"[SDcpp] Using user-specified CLIP-G: {clipGModel.Name}");
                     }
                     else
                     {
-                        // Use default CLIP-G from SwarmUI's registry
                         var clipModelSet = Program.T2IModelSets["Clip"];
-                        Logs.Debug($"[SDcpp] Searching for CLIP-G in registry with {clipModelSet.Models.Count} CLIP models");
                         var defaultClipG = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("clip_g"));
                         if (defaultClipG != null)
                         {
                             parameters["clip_g"] = defaultClipG.RawFilePath;
-                            Logs.Info($"[SDcpp] Using default CLIP-G: {defaultClipG.Name}");
+                            Logs.Debug($"[SDcpp] Using existing CLIP-G: {defaultClipG.Name}");
                         }
                         else
                         {
-                            Logs.Warning($"[SDcpp] CLIP-G not found in registry! Available models: {string.Join(", ", clipModelSet.Models.Values.Take(5).Select(m => m.Name))}");
+                            // Auto-download CLIP-G for SD3
+                            Logs.Info("[SDcpp] CLIP-G not found, auto-downloading...");
+                            string clipGPath = EnsureModelExists("Clip", "clip_g.safetensors",
+                                "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder_2/model.fp16.safetensors",
+                                "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4");
+                            if (!string.IsNullOrEmpty(clipGPath))
+                            {
+                                parameters["clip_g"] = clipGPath;
+                            }
                         }
                     }
                 }
@@ -924,21 +1051,28 @@ public class SDcppBackend : AbstractT2IBackend
                 if (input.TryGet(T2IParamTypes.ClipLModel, out T2IModel clipLModel) && clipLModel != null)
                 {
                     parameters["clip_l"] = clipLModel.RawFilePath;
-                    Logs.Debug($"[SDcpp] Using CLIP-L: {clipLModel.Name}");
+                    Logs.Debug($"[SDcpp] Using user-specified CLIP-L: {clipLModel.Name}");
                 }
                 else
                 {
-                    // Use default CLIP-L from SwarmUI's registry
                     var clipModelSet = Program.T2IModelSets["Clip"];
                     var defaultClipL = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("clip_l"));
                     if (defaultClipL != null)
                     {
                         parameters["clip_l"] = defaultClipL.RawFilePath;
-                        Logs.Info($"[SDcpp] Using default CLIP-L: {defaultClipL.Name}");
+                        Logs.Debug($"[SDcpp] Using existing CLIP-L: {defaultClipL.Name}");
                     }
                     else
                     {
-                        Logs.Warning($"[SDcpp] CLIP-L not found in registry!");
+                        // Auto-download CLIP-L
+                        Logs.Info("[SDcpp] CLIP-L not found, auto-downloading...");
+                        string clipLPath = EnsureModelExists("Clip", "clip_l.safetensors",
+                            "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder/model.fp16.safetensors",
+                            "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd");
+                        if (!string.IsNullOrEmpty(clipLPath))
+                        {
+                            parameters["clip_l"] = clipLPath;
+                        }
                     }
                 }
 
@@ -946,49 +1080,74 @@ public class SDcppBackend : AbstractT2IBackend
                 if (input.TryGet(T2IParamTypes.T5XXLModel, out T2IModel t5xxlModel) && t5xxlModel != null)
                 {
                     parameters["t5xxl"] = t5xxlModel.RawFilePath;
-                    Logs.Debug($"[SDcpp] Using T5-XXL: {t5xxlModel.Name}");
+                    Logs.Debug($"[SDcpp] Using user-specified T5-XXL: {t5xxlModel.Name}");
                 }
                 else
                 {
-                    // Use default T5-XXL from SwarmUI's registry
                     var clipModelSet = Program.T2IModelSets["Clip"];
                     var defaultT5 = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("t5xxl"));
                     if (defaultT5 != null)
                     {
                         parameters["t5xxl"] = defaultT5.RawFilePath;
-                        Logs.Info($"[SDcpp] Using default T5-XXL: {defaultT5.Name}");
+                        Logs.Debug($"[SDcpp] Using existing T5-XXL: {defaultT5.Name}");
                     }
                     else
                     {
-                        Logs.Warning($"[SDcpp] T5-XXL not found in registry!");
+                        // Auto-download T5-XXL (FP8 version to save space/VRAM)
+                        Logs.Info("[SDcpp] T5-XXL not found, auto-downloading (FP8 version)...");
+                        string t5Path = EnsureModelExists("Clip", "t5xxl_fp8_e4m3fn.safetensors",
+                            "https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+                            "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09");
+                        if (!string.IsNullOrEmpty(t5Path))
+                        {
+                            parameters["t5xxl"] = t5Path;
+                        }
                     }
                 }
 
-                // Validate required components
+                // Validate required components - fail early with helpful error
                 if (isFluxModel)
                 {
-                    if (!parameters.ContainsKey("vae") || !parameters.ContainsKey("clip_l") || !parameters.ContainsKey("t5xxl"))
+                    List<string> missing = [];
+                    if (!parameters.ContainsKey("vae")) missing.Add("VAE (ae.safetensors)");
+                    if (!parameters.ContainsKey("clip_l")) missing.Add("CLIP-L (clip_l.safetensors)");
+                    if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors or t5xxl_fp8_e4m3fn.safetensors)");
+
+                    if (missing.Count > 0)
                     {
-                        Logs.Warning("[SDcpp] Missing Flux components! SwarmUI will auto-download them.");
-                        Logs.Warning("[SDcpp] Please ensure VAE/CLIP models are available in Models/VAE and Models/clip folders.");
+                        string errorMsg = $"Flux models require additional component files that are not installed.\n\n" +
+                            $"Missing components:\n  • {string.Join("\n  • ", missing)}\n\n" +
+                            $"Download these files and place them in the appropriate folders:\n" +
+                            $"  • VAE → Models/VAE/\n" +
+                            $"  • CLIP-L, T5-XXL → Models/clip/\n\n" +
+                            $"Download links (Hugging Face):\n" +
+                            $"  • VAE: https://huggingface.co/black-forest-labs/FLUX.1-dev/blob/main/ae.safetensors\n" +
+                            $"  • CLIP-L: https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/clip_l.safetensors\n" +
+                            $"  • T5-XXL (FP16): https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/t5xxl_fp16.safetensors\n" +
+                            $"  • T5-XXL (FP8, smaller): https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/t5xxl_fp8_e4m3fn.safetensors\n\n" +
+                            $"After downloading, refresh models in SwarmUI and try again.";
+                        Logs.Error($"[SDcpp] {errorMsg}");
+                        throw new InvalidOperationException(errorMsg);
                     }
-                    else
-                    {
-                        Logs.Info("[SDcpp] All Flux components found successfully");
-                    }
+                    Logs.Info("[SDcpp] All Flux components found successfully");
                 }
                 else if (isSD3Model)
                 {
-                    if (!parameters.ContainsKey("clip_g") || !parameters.ContainsKey("clip_l") || !parameters.ContainsKey("t5xxl"))
+                    List<string> missing = [];
+                    if (!parameters.ContainsKey("clip_g")) missing.Add("CLIP-G (clip_g.safetensors)");
+                    if (!parameters.ContainsKey("clip_l")) missing.Add("CLIP-L (clip_l.safetensors)");
+                    if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors)");
+
+                    if (missing.Count > 0)
                     {
-                        Logs.Warning("[SDcpp] Missing SD3 components! SwarmUI will auto-download them.");
-                        Logs.Warning("[SDcpp] Please ensure CLIP models are available in Models/clip folder.");
-                        Logs.Info($"[SDcpp] Components status: clip_g={parameters.ContainsKey("clip_g")}, clip_l={parameters.ContainsKey("clip_l")}, t5xxl={parameters.ContainsKey("t5xxl")}");
+                        string errorMsg = $"SD3 models require additional component files that are not installed.\n\n" +
+                            $"Missing components:\n  • {string.Join("\n  • ", missing)}\n\n" +
+                            $"Download these files and place them in Models/clip/ folder.\n\n" +
+                            $"After downloading, refresh models in SwarmUI and try again.";
+                        Logs.Error($"[SDcpp] {errorMsg}");
+                        throw new InvalidOperationException(errorMsg);
                     }
-                    else
-                    {
-                        Logs.Info("[SDcpp] All SD3 components found successfully");
-                    }
+                    Logs.Info("[SDcpp] All SD3 components found successfully");
                 }
             }
             else if (mainModel != null)
@@ -1006,7 +1165,7 @@ public class SDcppBackend : AbstractT2IBackend
         if (input.TryGet(T2IParamTypes.InitImage, out Image initImage))
         {
             string initImagePath = Path.Combine(outputDir, "init.png");
-            File.WriteAllBytes(initImagePath, initImage.ImageData);
+            File.WriteAllBytes(initImagePath, initImage.RawData);
             parameters["init_img"] = initImagePath;
 
             if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
@@ -1036,11 +1195,15 @@ public class SDcppBackend : AbstractT2IBackend
             try
             {
                 byte[] imageData = await File.ReadAllBytesAsync(imagePath);
-                Image image = new(imageData, Image.ImageType.IMAGE, "png");
-                
-                // Metadata will be added later when Image class supports it
-                // For now, just create the image without metadata
-
+                // Determine media type from file extension
+                string ext = Path.GetExtension(imagePath).ToLowerInvariant();
+                MediaType mediaType = ext switch
+                {
+                    ".png" => MediaType.ImagePng,
+                    ".jpg" or ".jpeg" => MediaType.ImageJpg,
+                    _ => MediaType.ImagePng
+                };
+                Image image = new(imageData, mediaType);
                 images.Add(image);
             }
             catch (Exception ex)

@@ -18,6 +18,9 @@ public class SDcppProcessManager : IDisposable
     public readonly string WorkingDirectory;
     public bool Disposed = false;
 
+    /// <summary>Required CUDA version for SD.cpp CUDA builds</summary>
+    private const string REQUIRED_CUDA_VERSION = "12";
+
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
         Settings = settings;
@@ -27,6 +30,209 @@ public class SDcppProcessManager : IDisposable
 
         // Ensure working directory exists
         Directory.CreateDirectory(WorkingDirectory);
+    }
+
+    /// <summary>
+    /// Gets detailed system information for debugging purposes.
+    /// Includes GPU info, CUDA version, driver version, and OS details.
+    /// </summary>
+    public static string GetSystemDebugInfo()
+    {
+        StringBuilder sb = new();
+        sb.AppendLine("=== SD.cpp System Debug Info ===");
+
+        // OS Info
+        sb.AppendLine($"OS: {RuntimeInformation.OSDescription}");
+        sb.AppendLine($"Architecture: {RuntimeInformation.OSArchitecture}");
+        sb.AppendLine($".NET Runtime: {RuntimeInformation.FrameworkDescription}");
+
+        // NVIDIA GPU Info via SwarmUI's NvidiaUtil
+        try
+        {
+            var nvidiaInfo = NvidiaUtil.QueryNvidia();
+            if (nvidiaInfo != null && nvidiaInfo.Length > 0)
+            {
+                sb.AppendLine($"\n--- NVIDIA GPU(s) Detected ---");
+                foreach (var gpu in nvidiaInfo)
+                {
+                    sb.AppendLine($"  GPU {gpu.ID}: {gpu.GPUName}");
+                    sb.AppendLine($"    Driver Version: {gpu.DriverVersion}");
+                    sb.AppendLine($"    Total Memory: {gpu.TotalMemory}");
+                    sb.AppendLine($"    Free Memory: {gpu.FreeMemory}");
+                    sb.AppendLine($"    Temperature: {gpu.Temperature}°C");
+                }
+            }
+            else
+            {
+                sb.AppendLine("\n--- No NVIDIA GPU detected via nvidia-smi ---");
+            }
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"\n--- Failed to query NVIDIA GPU: {ex.Message} ---");
+        }
+
+        // CUDA Installation Info
+        sb.AppendLine($"\n--- CUDA Installation ---");
+        var (cudaVersion, cudaPath) = DetectInstalledCudaVersion();
+        if (!string.IsNullOrEmpty(cudaVersion))
+        {
+            sb.AppendLine($"  Installed CUDA Version: {cudaVersion}");
+            sb.AppendLine($"  CUDA Path: {cudaPath}");
+
+            // Check if it matches required version
+            if (!cudaVersion.StartsWith(REQUIRED_CUDA_VERSION))
+            {
+                sb.AppendLine($"  ⚠️ WARNING: SD.cpp CUDA build requires CUDA {REQUIRED_CUDA_VERSION}.x");
+                sb.AppendLine($"     Your installed version ({cudaVersion}) may not be compatible.");
+            }
+            else
+            {
+                sb.AppendLine($"  ✓ CUDA version is compatible with SD.cpp");
+            }
+        }
+        else
+        {
+            sb.AppendLine("  No CUDA installation detected");
+            sb.AppendLine($"  Required: CUDA {REQUIRED_CUDA_VERSION}.x runtime");
+        }
+
+        // Check CUDA_PATH environment variable
+        string cudaPathEnv = Environment.GetEnvironmentVariable("CUDA_PATH");
+        sb.AppendLine($"\n--- Environment Variables ---");
+        sb.AppendLine($"  CUDA_PATH: {cudaPathEnv ?? "(not set)"}");
+
+        // Check for specific CUDA DLLs that SD.cpp needs
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            sb.AppendLine($"\n--- CUDA Runtime DLL Check ---");
+            string[] criticalDlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"];
+            string systemPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+
+            foreach (string dll in criticalDlls)
+            {
+                bool found = false;
+                // Check in CUDA bin path
+                if (!string.IsNullOrEmpty(cudaPath))
+                {
+                    string dllPath = Path.Combine(cudaPath, "bin", dll);
+                    if (File.Exists(dllPath))
+                    {
+                        sb.AppendLine($"  ✓ {dll} found at: {dllPath}");
+                        found = true;
+                    }
+                }
+                // Also check System32
+                string system32Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), dll);
+                if (File.Exists(system32Path))
+                {
+                    sb.AppendLine($"  ✓ {dll} found at: {system32Path}");
+                    found = true;
+                }
+
+                if (!found)
+                {
+                    sb.AppendLine($"  ✗ {dll} NOT FOUND - this is required for CUDA {REQUIRED_CUDA_VERSION}");
+                }
+            }
+        }
+
+        sb.AppendLine("================================");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Detects the installed CUDA version by checking environment variables and common install paths.
+    /// </summary>
+    /// <returns>Tuple of (version string, installation path) or (null, null) if not found</returns>
+    public static (string Version, string Path) DetectInstalledCudaVersion()
+    {
+        try
+        {
+            // Method 1: Check CUDA_PATH environment variable
+            string cudaPath = Environment.GetEnvironmentVariable("CUDA_PATH");
+            if (!string.IsNullOrEmpty(cudaPath) && Directory.Exists(cudaPath))
+            {
+                string version = ExtractCudaVersionFromPath(cudaPath);
+                if (!string.IsNullOrEmpty(version))
+                {
+                    return (version, cudaPath);
+                }
+            }
+
+            // Method 2: Run nvcc --version if available
+            try
+            {
+                ProcessStartInfo psi = new()
+                {
+                    FileName = "nvcc",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using Process proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    string output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit(5000);
+
+                    // Parse version from output like "Cuda compilation tools, release 12.2, V12.2.140"
+                    var match = System.Text.RegularExpressions.Regex.Match(output, @"release\s+(\d+\.\d+)");
+                    if (match.Success)
+                    {
+                        return (match.Groups[1].Value, cudaPath ?? "nvcc in PATH");
+                    }
+                }
+            }
+            catch
+            {
+                // nvcc not in PATH, continue to other methods
+            }
+
+            // Method 3: Check common installation directories on Windows
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                string cudaRoot = Path.Combine(programFiles, "NVIDIA GPU Computing Toolkit", "CUDA");
+
+                if (Directory.Exists(cudaRoot))
+                {
+                    // Find the most recent CUDA version directory
+                    var versionDirs = Directory.GetDirectories(cudaRoot)
+                        .Select(d => new { Path = d, Version = ExtractCudaVersionFromPath(d) })
+                        .Where(x => !string.IsNullOrEmpty(x.Version))
+                        .OrderByDescending(x => x.Version)
+                        .ToList();
+
+                    if (versionDirs.Count > 0)
+                    {
+                        return (versionDirs[0].Version, versionDirs[0].Path);
+                    }
+                }
+            }
+
+            return (null, null);
+        }
+        catch (Exception ex)
+        {
+            Logs.Debug($"[SDcpp] Error detecting CUDA version: {ex.Message}");
+            return (null, null);
+        }
+    }
+
+    /// <summary>
+    /// Extracts CUDA version number from a path like "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2"
+    /// </summary>
+    private static string ExtractCudaVersionFromPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+
+        // Look for version pattern like "v12.2" or "12.2" in the path
+        var match = System.Text.RegularExpressions.Regex.Match(path, @"v?(\d+\.\d+)");
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     /// <summary>
@@ -135,15 +341,39 @@ public class SDcppProcessManager : IDisposable
     public bool ValidateRuntime(out string errorMessage)
     {
         errorMessage = null;
+        bool isCuda = Settings.Device.ToLowerInvariant() == "cuda";
+        const string CudaDownloadUrl = "https://developer.nvidia.com/cuda-12-6-0-download-archive";
+
         try
         {
-            const string CudaDownloadUrl = "https://developer.nvidia.com/cuda-downloads";
             if (!ValidateExecutable())
             {
                 errorMessage = "SD.cpp executable is missing or not configured.";
                 return false;
             }
 
+            // Log system info upfront for CUDA to help diagnose issues
+            if (isCuda)
+            {
+                var (cudaVersion, cudaPath) = DetectInstalledCudaVersion();
+                Logs.Info($"[SDcpp] Validating CUDA runtime for SD.cpp...");
+                Logs.Info($"[SDcpp] Detected CUDA version: {cudaVersion ?? "NOT FOUND"}");
+                Logs.Info($"[SDcpp] CUDA path: {cudaPath ?? "NOT FOUND"}");
+                Logs.Info($"[SDcpp] Required CUDA version: {REQUIRED_CUDA_VERSION}.x");
+
+                if (string.IsNullOrEmpty(cudaVersion))
+                {
+                    Logs.Warning($"[SDcpp] No CUDA installation detected. SD.cpp CUDA build requires CUDA {REQUIRED_CUDA_VERSION} runtime.");
+                }
+                else if (!cudaVersion.StartsWith(REQUIRED_CUDA_VERSION))
+                {
+                    Logs.Warning($"[SDcpp] CUDA version mismatch: installed {cudaVersion}, required {REQUIRED_CUDA_VERSION}.x");
+                }
+            }
+
+            // For validation, we just need to verify the binary can START (DLLs present)
+            // We don't need it to complete - CUDA initialization can take a very long time
+            // Use --help which should print quickly, but we only wait a short time
             ProcessStartInfo psi = new()
             {
                 FileName = Settings.ExecutablePath,
@@ -156,7 +386,7 @@ public class SDcppProcessManager : IDisposable
             };
 
             // Add CUDA bin directory to PATH for CUDA device to find runtime DLLs
-            if (Settings.Device.ToLowerInvariant() == "cuda")
+            if (isCuda)
             {
                 string cudaBinPath = FindCudaBinDirectory();
                 if (!string.IsNullOrEmpty(cudaBinPath))
@@ -164,6 +394,10 @@ public class SDcppProcessManager : IDisposable
                     string currentPath = psi.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH");
                     psi.EnvironmentVariables["PATH"] = $"{cudaBinPath};{currentPath}";
                     Logs.Debug($"[SDcpp] Added CUDA bin to PATH for validation: {cudaBinPath}");
+                }
+                else
+                {
+                    Logs.Warning("[SDcpp] Could not find CUDA bin directory to add to PATH");
                 }
             }
 
@@ -198,18 +432,36 @@ public class SDcppProcessManager : IDisposable
                 testProcess.BeginOutputReadLine();
                 testProcess.BeginErrorReadLine();
 
-                bool exited = testProcess.WaitForExit(15000);
+                // Wait a short time for the process to either:
+                // 1. Exit quickly (with success or error)
+                // 2. Start producing output (proving it loaded successfully)
+                // 3. Crash immediately with a DLL error
+                // For CUDA, we give it more time since GPU init can be slow
+                int quickCheckMs = isCuda ? 5000 : 2000;
+                bool exited = testProcess.WaitForExit(quickCheckMs);
+
                 if (!exited)
                 {
-                    try
+                    // Process is still running after quick check
+                    // For CUDA, if it's still running, that means DLLs loaded successfully
+                    // The process might just be slow to initialize CUDA - that's OK
+                    if (isCuda)
                     {
-                        testProcess.Kill();
+                        Logs.Info("[SDcpp] CUDA binary started successfully (process is initializing)");
+                        Logs.Debug("[SDcpp] Killing validation process - we've confirmed it can start");
+                        try { testProcess.Kill(); } catch { }
+                        Logs.Info("[SDcpp] Runtime validation successful - CUDA runtime is available");
+                        return true;
                     }
-                    catch
+                    
+                    // For non-CUDA, wait longer
+                    exited = testProcess.WaitForExit(13000); // Total 15 seconds
+                    if (!exited)
                     {
+                        try { testProcess.Kill(); } catch { }
+                        errorMessage = "SD.cpp test process did not exit in time (possible driver/runtime issue).";
+                        return false;
                     }
-                    errorMessage = "SD.cpp test process did not exit in time (possible driver/runtime issue).";
-                    return false;
                 }
 
                 int code = testProcess.ExitCode;
@@ -217,60 +469,78 @@ public class SDcppProcessManager : IDisposable
 
                 if (code != 0)
                 {
+                    // Log detailed system info on failure
+                    Logs.Error($"[SDcpp] Runtime validation failed with exit code {code} (0x{code:X8})");
+                    if (!string.IsNullOrEmpty(stderrText))
+                    {
+                        Logs.Error($"[SDcpp] Error output: {stderrText}");
+                    }
+
+                    // Log full debug info
+                    string debugInfo = GetSystemDebugInfo();
+                    foreach (string line in debugInfo.Split('\n'))
+                    {
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            Logs.Info($"[SDcpp] {line.TrimEnd()}");
+                        }
+                    }
+
                     // Exit code -1073741515 (0xC0000135) = STATUS_DLL_NOT_FOUND
                     if (code == -1073741515)
                     {
-                        if (Settings.Device.ToLowerInvariant() == "cuda")
+                        if (isCuda)
                         {
-                            errorMessage = $"SD.cpp CUDA binary failed to start (missing DLL error). This is likely due to missing CUDA runtime DLLs.\n\n" +
-                                $"To fix this:\n" +
-                                $"1. Install CUDA 12 runtime from: {CudaDownloadUrl}\n" +
-                                $"   OR\n" +
-                                $"2. Change SD.cpp backend device to 'CPU (Universal)' in backend settings\n\n" +
-                                $"The CUDA runtime is separate from the CUDA Toolkit - even if you have the Toolkit installed, you may need the runtime.";
-                            Logs.Info($"[SDcpp] CUDA runtime download page: {CudaDownloadUrl}");
+                            var (installedVersion, _) = DetectInstalledCudaVersion();
+                            errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
                         }
                         else
                         {
-                            errorMessage = $"SD.cpp binary failed to start (missing DLL error). This usually means you need to install:\n\n" +
+                            errorMessage = $"SD.cpp binary failed to start (missing DLL error - 0xC0000135).\n\n" +
+                                $"This usually means you need to install:\n" +
                                 $"Microsoft Visual C++ Redistributable (2015-2022)\n" +
                                 $"Download from: https://aka.ms/vs/17/release/vc_redist.x64.exe\n\n" +
                                 $"After installing, restart SwarmUI.";
-                            Logs.Error("[SDcpp] Missing Visual C++ Runtime - SD.cpp binary cannot run without it.");
                             Logs.Info("[SDcpp] Download Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe");
                         }
                     }
+                    else if (isCuda)
+                    {
+                        var (installedVersion, _) = DetectInstalledCudaVersion();
+                        errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
+                    }
                     else
                     {
-                        string lowerErr = stderrText.ToLowerInvariant();
-                        if (Settings.Device.ToLowerInvariant() == "cuda")
-                        {
-                            errorMessage = "Failed to start SD.cpp CUDA binary. This usually means the required CUDA runtime libraries for this build are not installed. Please install the matching CUDA runtime (for example CUDA 12 runtime on Windows for the current SD.cpp build) or switch the SD.cpp backend device to CPU or Vulkan. See NVIDIA CUDA downloads: " + CudaDownloadUrl + ".";
-                            Logs.Info($"[SDcpp] CUDA runtime download page: {CudaDownloadUrl}");
-                        }
-                        else
-                        {
-                            errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test. Error output: {stderrText}";
-                        }
+                        errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test.\nError output: {stderrText}";
                     }
-                    Logs.Error($"[SDcpp] Runtime validation failed with exit code {code}. Error: {stderrText}");
                     return false;
                 }
 
+                Logs.Info("[SDcpp] Runtime validation successful");
                 return true;
             }
             catch (System.ComponentModel.Win32Exception ex)
             {
-                if (Settings.Device.ToLowerInvariant() == "cuda")
+                // Log full debug info on Win32 exception
+                Logs.Error($"[SDcpp] Win32 exception during runtime validation: {ex.Message}");
+                string debugInfo = GetSystemDebugInfo();
+                foreach (string line in debugInfo.Split('\n'))
                 {
-                    errorMessage = "Failed to launch SD.cpp CUDA executable. This usually indicates missing CUDA runtime DLLs. Please install the appropriate CUDA runtime for this SD.cpp build (for example CUDA 12 runtime on Windows) and restart SwarmUI, or change the SD.cpp backend device to CPU or Vulkan. See NVIDIA CUDA downloads: " + CudaDownloadUrl + ".";
-                    Logs.Info($"[SDcpp] CUDA runtime download page: {CudaDownloadUrl}");
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        Logs.Info($"[SDcpp] {line.TrimEnd()}");
+                    }
+                }
+
+                if (isCuda)
+                {
+                    var (installedVersion, _) = DetectInstalledCudaVersion();
+                    errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
                 }
                 else
                 {
                     errorMessage = $"Failed to launch SD.cpp executable: {ex.Message}";
                 }
-                Logs.Error($"[SDcpp] Runtime validation error while starting SD.cpp: {ex}");
                 return false;
             }
         }
@@ -280,6 +550,50 @@ public class SDcppProcessManager : IDisposable
             Logs.Error($"[SDcpp] Unexpected error during runtime validation: {ex}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Builds a detailed error message for CUDA runtime issues.
+    /// </summary>
+    private static string BuildCudaErrorMessage(string installedVersion, string downloadUrl)
+    {
+        StringBuilder sb = new();
+        sb.AppendLine("SD.cpp CUDA binary failed to start due to missing or incompatible CUDA runtime.");
+        sb.AppendLine();
+
+        if (string.IsNullOrEmpty(installedVersion))
+        {
+            sb.AppendLine($"❌ No CUDA installation detected on your system.");
+            sb.AppendLine($"   SD.cpp requires CUDA {REQUIRED_CUDA_VERSION}.x runtime libraries.");
+        }
+        else if (!installedVersion.StartsWith(REQUIRED_CUDA_VERSION))
+        {
+            sb.AppendLine($"❌ CUDA version mismatch detected:");
+            sb.AppendLine($"   • Installed: CUDA {installedVersion}");
+            sb.AppendLine($"   • Required:  CUDA {REQUIRED_CUDA_VERSION}.x");
+            sb.AppendLine();
+            sb.AppendLine($"   The SD.cpp binary was compiled for CUDA {REQUIRED_CUDA_VERSION} and requires");
+            sb.AppendLine($"   the matching runtime DLLs (cudart64_12.dll, cublas64_12.dll, etc.).");
+        }
+        else
+        {
+            sb.AppendLine($"⚠️ CUDA {installedVersion} detected but runtime DLLs may not be in PATH.");
+            sb.AppendLine($"   Try adding the CUDA bin directory to your system PATH.");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("To fix this, choose one of these options:");
+        sb.AppendLine();
+        sb.AppendLine($"  1. Install CUDA {REQUIRED_CUDA_VERSION} Toolkit (includes runtime):");
+        sb.AppendLine($"     {downloadUrl}");
+        sb.AppendLine();
+        sb.AppendLine("  2. Switch to CPU mode:");
+        sb.AppendLine("     Change 'Device' to 'CPU (Universal)' in backend settings.");
+        sb.AppendLine("     (Slower but works without CUDA installation)");
+
+        Logs.Info($"[SDcpp] CUDA {REQUIRED_CUDA_VERSION} download page: {downloadUrl}");
+
+        return sb.ToString();
     }
 
     /// <summary>
@@ -297,8 +611,37 @@ public class SDcppProcessManager : IDisposable
         if (Settings.Threads > 0)
             args.Add($"--threads {Settings.Threads}");
 
-        if (!string.IsNullOrEmpty(Settings.WeightType))
+        // Handle weight type based on model type
+        bool isMultiComponent = parameters.ContainsKey("diffusion_model");
+        if (isMultiComponent && isFluxModel)
+        {
+            // For Flux GGUF models, don't specify --type - let SD.cpp use the GGUF's built-in quantization
+            // The diffusion model already has quantization baked in (Q2_K, Q4_K, Q8_0, etc.)
+            // Only use --type for non-GGUF models or if we need to force a specific compute type
+            
+            // Check if it's a GGUF model (quantization is embedded)
+            bool isGgufModel = parameters.TryGetValue("diffusion_model", out var dm) && 
+                               dm?.ToString()?.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) == true;
+            
+            if (!isGgufModel)
+            {
+                // Non-GGUF Flux models (safetensors) need explicit type
+                args.Add("--type f16");
+            }
+            // For GGUF models, omit --type entirely to use the model's native quantization
+            
+            // Enable flash attention for significant VRAM savings on Flux
+            args.Add("--diffusion-fa");
+            
+            // Offload text encoders to CPU to free GPU VRAM for diffusion
+            // This is crucial for Flux on 8-12GB cards
+            args.Add("--clip-on-cpu");
+        }
+        else if (!string.IsNullOrEmpty(Settings.WeightType))
+        {
+            // Standard models use the WeightType setting
             args.Add($"--type {Settings.WeightType}");
+        }
 
         // Force CPU usage if device is set to CPU to avoid Vulkan memory issues
         if (Settings.Device.ToLowerInvariant() == "cpu")
