@@ -173,7 +173,6 @@ public class SDcppExtension : Extension
                 Min: 1, Max: 100, Step: 1,
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
-                FeatureFlag: "flux",
                 OrderPriority: 1
             ));
 
@@ -184,7 +183,6 @@ public class SDcppExtension : Extension
                 Min: 1, Max: 20, Step: 1,
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
-                FeatureFlag: "flux",
                 OrderPriority: 2
             ));
 
