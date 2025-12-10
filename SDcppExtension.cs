@@ -20,6 +20,8 @@ public class SDcppExtension : Extension
 
     /// <summary>SD.cpp sampler parameter reference</summary>
     public static T2IRegisteredParam<string> SamplerParam;
+    public static T2IRegisteredParam<int> FluxDevStepsParam;
+    public static T2IRegisteredParam<int> FluxSchnellStepsParam;
 
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
@@ -166,23 +168,25 @@ public class SDcppExtension : Extension
             ));
 
             // Flux-specific parameters
-            T2IParamTypes.Register<int>(new(
+            FluxDevStepsParam = T2IParamTypes.Register<int>(new(
                 "Flux Dev Steps",
                 "Default sampling steps for Flux-dev models. 20+ recommended for quality.",
                 "20",
                 Min: 1, Max: 100, Step: 1,
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
+                FeatureFlag: "flux-dev",
                 OrderPriority: 1
             ));
 
-            T2IParamTypes.Register<int>(new(
+            FluxSchnellStepsParam = T2IParamTypes.Register<int>(new(
                 "Flux Schnell Steps",
                 "Default sampling steps for Flux-schnell models. 4 recommended for speed.",
                 "4",
                 Min: 1, Max: 20, Step: 1,
                 ViewType: ParamViewType.SLIDER,
                 Group: fluxGroup,
+                FeatureFlag: "flux-dev",
                 OrderPriority: 2
             ));
 

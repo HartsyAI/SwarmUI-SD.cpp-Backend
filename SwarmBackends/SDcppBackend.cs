@@ -1,5 +1,6 @@
 using FreneticUtilities.FreneticDataSyntax;
 using Hartsy.Extensions.SDcppExtension.Utils;
+using Hartsy.Extensions.SDcppExtension;
 using SwarmUI.Backends;
 using SwarmUI.Core;
 using SwarmUI.Media;
@@ -38,12 +39,15 @@ public class SDcppBackend : AbstractT2IBackend
 
         [ConfigComment("Quantization level for Flux models (GGUF format).\n'q8_0' provides best quality with ~12GB VRAM.\n'q4_0' is good for 6-8GB VRAM.\n'q2_k' can run on 4GB VRAM but with quality loss.")]
         [ManualSettingsOptions(Impl = null, Vals = ["q8_0", "q4_0", "q4_k", "q3_k", "q2_k"], ManualNames = ["q8_0 (Best Quality, 12GB VRAM)", "q4_0 (Balanced, 6-8GB VRAM)", "q4_k (Balanced Alt)", "q3_k (Low VRAM, 4-6GB)", "q2_k (Minimal VRAM, 4GB)"])]
+        [SettingHidden]
         public string FluxQuantization = "q8_0";
 
         [ConfigComment("Default number of sampling steps for Flux-dev models (20+ recommended for quality).")]
+        [SettingHidden]
         public int FluxDevSteps = 20;
 
         [ConfigComment("Default number of sampling steps for Flux-schnell models (4 recommended for speed).")]
+        [SettingHidden]
         public int FluxSchnellSteps = 4;
 
         [ConfigComment("Enable VAE tiling to reduce memory usage. Recommended for systems with limited RAM/VRAM.")]
@@ -65,7 +69,9 @@ public class SDcppBackend : AbstractT2IBackend
         public bool DebugMode = false;
 
         // Internal settings - not exposed to user
+        [SettingHidden]
         internal string ExecutablePath = "";
+        [SettingHidden]
         internal string WorkingDirectory = "";
     }
     /// <summary>Configuration settings controlling SD.cpp behavior, paths, and optimization flags</summary>
@@ -922,7 +928,22 @@ public class SDcppBackend : AbstractT2IBackend
             if (isFluxModel && steps == 0)
             {
                 bool isSchnell = CurrentModelName.ToLowerInvariant().Contains("schnell");
-                steps = isSchnell ? Settings.FluxSchnellSteps : Settings.FluxDevSteps;
+
+                int defaultSteps = isSchnell ? Settings.FluxSchnellSteps : Settings.FluxDevSteps;
+
+                // Allow per-generation overrides via Flux-specific parameters when available
+                if (isSchnell && SDcppExtension.FluxSchnellStepsParam is not null
+                    && input.TryGet(SDcppExtension.FluxSchnellStepsParam, out int schnellSteps))
+                {
+                    defaultSteps = schnellSteps;
+                }
+                else if (!isSchnell && SDcppExtension.FluxDevStepsParam is not null
+                    && input.TryGet(SDcppExtension.FluxDevStepsParam, out int devSteps))
+                {
+                    defaultSteps = devSteps;
+                }
+
+                steps = defaultSteps;
                 Logs.Info($"[SDcpp] Using default Flux steps: {steps}");
             }
             parameters["steps"] = steps;
