@@ -144,24 +144,15 @@ Device: cpu | cuda | vulkan
 - **CUDA** - NVIDIA GPUs (best for Flux)
 - **Vulkan** - Any modern GPU (⚠️ Flux may not work reliably)
 
-### Flux-Specific Settings
+### Flux Notes
 
-```
-FluxQuantization: q8_0 | q4_0 | q3_k | q2_k
-```
-- Choose based on available VRAM
-- Affects conversion and memory usage
+Flux models should be provided in a compatible format (GGUF preferred).
 
-```
-AutoConvertFluxToGGUF: true | false
-```
-- Automatically convert Flux models on first use
-- Disable if you prefer manual conversion
+Flux step counts are controlled via SwarmUI's standard `Steps` parameter.
+If `Steps` is left at 0, the SD.cpp backend will default to:
 
-```
-FluxDevSteps: 20 (default)
-FluxSchnellSteps: 4 (default)
-```
+- Flux-schnell: 4
+- Flux-dev: 20
 - Default sampling steps for Flux variants
 - Flux-dev: 20+ steps recommended
 - Flux-schnell: 4 steps optimized

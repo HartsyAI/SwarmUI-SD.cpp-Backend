@@ -20,6 +20,10 @@ public class SDcppExtension : Extension
 
     /// <summary>SD.cpp sampler parameter reference</summary>
     public static T2IRegisteredParam<string> SamplerParam;
+    public static T2IRegisteredParam<bool> VAETilingParam;
+    public static T2IRegisteredParam<bool> VAEOnCPUParam;
+    public static T2IRegisteredParam<bool> CLIPOnCPUParam;
+    public static T2IRegisteredParam<bool> FlashAttentionParam;
 
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
@@ -128,7 +132,7 @@ public class SDcppExtension : Extension
             T2IParamGroup sdcppGroup = new("SD.cpp", Toggles: true, Open: false, OrderPriority: 5);
 
             // SD.cpp general parameters
-            T2IParamTypes.Register<bool>(new(
+            VAETilingParam = T2IParamTypes.Register<bool>(new(
                 "VAE Tiling",
                 "Enable VAE tiling to reduce memory usage during generation. Recommended for limited VRAM systems.",
                 "true",
@@ -137,7 +141,7 @@ public class SDcppExtension : Extension
                 OrderPriority: 1
             ));
 
-            T2IParamTypes.Register<bool>(new(
+            VAEOnCPUParam = T2IParamTypes.Register<bool>(new(
                 "VAE on CPU",
                 "Run VAE decoder on CPU instead of GPU. Useful if running out of VRAM.",
                 "false",
@@ -146,7 +150,7 @@ public class SDcppExtension : Extension
                 OrderPriority: 2
             ));
 
-            T2IParamTypes.Register<bool>(new(
+            CLIPOnCPUParam = T2IParamTypes.Register<bool>(new(
                 "CLIP on CPU",
                 "Run CLIP text encoder on CPU instead of GPU. Useful if running out of VRAM.",
                 "false",
@@ -155,7 +159,7 @@ public class SDcppExtension : Extension
                 OrderPriority: 3
             ));
 
-            T2IParamTypes.Register<bool>(new(
+            FlashAttentionParam = T2IParamTypes.Register<bool>(new(
                 "Flash Attention",
                 "Enable Flash Attention optimization. May reduce quality slightly but saves memory.",
                 "false",

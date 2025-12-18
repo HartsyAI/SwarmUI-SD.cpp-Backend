@@ -15,6 +15,13 @@ public static class SDcppDownloadManager
 {
     private static readonly HttpClient HttpClient = new();
 
+    private static readonly string[] WindowsExecutableCandidates = [
+        "sd.exe",
+        "stable-diffusion.exe",
+        "stable-diffusion-cpp.exe",
+        "stable-diffusion.cpp.exe"
+    ];
+
     /// <summary>GitHub API endpoint for latest SD.cpp releases</summary>
     private const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
 
@@ -46,6 +53,18 @@ public static class SDcppDownloadManager
             {
                 Logs.Info($"[SDcpp] Found existing SD.cpp executable: {expectedExecutable}");
                 return expectedExecutable;
+            }
+
+            // If sd.exe is not present, the upstream release may have changed naming.
+            // Search for any suitable executable in the device directory.
+            if (Directory.Exists(deviceDir))
+            {
+                string existing = FindBestExecutableInDirectory(deviceDir);
+                if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
+                {
+                    Logs.Info($"[SDcpp] Found existing SD.cpp executable (non-standard name): {existing}");
+                    return existing;
+                }
             }
 
             // Check if user specified a custom path that exists AND is for the correct device type
@@ -293,13 +312,12 @@ public static class SDcppDownloadManager
             // Extract to temp directory first
             ZipFile.ExtractToDirectory(zipPath, tempExtractDir);
 
-            // Find the executable in extracted files
-            string executableName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "sd.exe" : "sd";
-            string foundExecutable = FindExecutableInDirectory(tempExtractDir, executableName);
+            // Find the executable in extracted files (asset layouts/names vary by release)
+            string foundExecutable = FindBestExecutableInDirectory(tempExtractDir);
 
             if (string.IsNullOrEmpty(foundExecutable))
             {
-                Logs.Error($"[SDcpp] Could not find {executableName} in extracted files");
+                Logs.Error("[SDcpp] Could not find SD.cpp executable in extracted files");
                 return null;
             }
 
@@ -307,7 +325,7 @@ public static class SDcppDownloadManager
             string sourceDir = Path.GetDirectoryName(foundExecutable);
             CopyDirectoryContents(sourceDir, targetDir);
 
-            string finalExecutable = Path.Combine(targetDir, executableName);
+            string finalExecutable = Path.Combine(targetDir, Path.GetFileName(foundExecutable));
 
             // Set executable permissions on Unix
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -340,6 +358,50 @@ public static class SDcppDownloadManager
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error downloading and extracting: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static string FindBestExecutableInDirectory(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                foreach (string exeName in WindowsExecutableCandidates)
+                {
+                    string found = FindExecutableInDirectory(directory, exeName);
+                    if (!string.IsNullOrEmpty(found))
+                    {
+                        return found;
+                    }
+                }
+
+                // Fallback: if upstream changed naming, grab the first .exe that isn't a helper/uninstaller.
+                foreach (string exe in Directory.GetFiles(directory, "*.exe", SearchOption.AllDirectories))
+                {
+                    string file = Path.GetFileName(exe).ToLowerInvariant();
+                    if (file.Contains("unins") || file.Contains("setup"))
+                    {
+                        continue;
+                    }
+                    return exe;
+                }
+
+                return null;
+            }
+
+            // Unix-like: should be sd
+            return FindExecutableInDirectory(directory, "sd");
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcpp] Error searching for executable: {ex.Message}");
             return null;
         }
     }

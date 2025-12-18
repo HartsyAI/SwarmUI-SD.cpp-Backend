@@ -611,7 +611,14 @@ public class SDcppProcessManager : IDisposable
         if (Settings.Threads > 0)
             args.Add($"--threads {Settings.Threads}");
 
-        // Handle weight type based on model type
+        // Per-request runtime toggles (provided by SDcppBackend.BuildGenerationParameters).
+        // These are not backend settings.
+        bool vaeTiling = parameters.TryGetValue("vae_tiling", out object vaeTilingRaw) && vaeTilingRaw is bool vaeTilingVal && vaeTilingVal;
+        bool vaeOnCpu = parameters.TryGetValue("vae_on_cpu", out object vaeOnCpuRaw) && vaeOnCpuRaw is bool vaeOnCpuVal && vaeOnCpuVal;
+        bool clipOnCpu = parameters.TryGetValue("clip_on_cpu", out object clipOnCpuRaw) && clipOnCpuRaw is bool clipOnCpuVal && clipOnCpuVal;
+        bool flashAttention = parameters.TryGetValue("flash_attention", out object flashAttnRaw) && flashAttnRaw is bool flashAttnVal && flashAttnVal;
+
+        // Handle model type based on model type
         bool isMultiComponent = parameters.ContainsKey("diffusion_model");
         if (isMultiComponent && isFluxModel)
         {
@@ -629,18 +636,6 @@ public class SDcppProcessManager : IDisposable
                 args.Add("--type f16");
             }
             // For GGUF models, omit --type entirely to use the model's native quantization
-            
-            // Enable flash attention for significant VRAM savings on Flux
-            args.Add("--diffusion-fa");
-            
-            // Offload text encoders to CPU to free GPU VRAM for diffusion
-            // This is crucial for Flux on 8-12GB cards
-            args.Add("--clip-on-cpu");
-        }
-        else if (!string.IsNullOrEmpty(Settings.WeightType))
-        {
-            // Standard models use the WeightType setting
-            args.Add($"--type {Settings.WeightType}");
         }
 
         // Force CPU usage if device is set to CPU to avoid Vulkan memory issues
@@ -716,20 +711,20 @@ public class SDcppProcessManager : IDisposable
             args.Add($"--output \"{output}\"");
 
 
-        // Apply individual settings only if not using CPU device (to avoid duplicates)
+        // Apply per-request runtime toggles only if not using CPU device (to avoid duplicates)
         if (Settings.Device.ToLowerInvariant() != "cpu")
         {
-            if (Settings.VAETiling)
+            if (vaeTiling)
                 args.Add("--vae-tiling");
 
-            if (Settings.VAEOnCPU)
+            if (vaeOnCpu)
                 args.Add("--vae-on-cpu");
 
-            if (Settings.CLIPOnCPU)
+            if (clipOnCpu)
                 args.Add("--clip-on-cpu");
         }
 
-        if (Settings.FlashAttention)
+        if (flashAttention)
             args.Add("--diffusion-fa");
 
 
