@@ -931,18 +931,6 @@ public class SDcppBackend : AbstractT2IBackend
 
                 int defaultSteps = isSchnell ? Settings.FluxSchnellSteps : Settings.FluxDevSteps;
 
-                // Allow per-generation overrides via Flux-specific parameters when available
-                if (isSchnell && SDcppExtension.FluxSchnellStepsParam is not null
-                    && input.TryGet(SDcppExtension.FluxSchnellStepsParam, out int schnellSteps))
-                {
-                    defaultSteps = schnellSteps;
-                }
-                else if (!isSchnell && SDcppExtension.FluxDevStepsParam is not null
-                    && input.TryGet(SDcppExtension.FluxDevStepsParam, out int devSteps))
-                {
-                    defaultSteps = devSteps;
-                }
-
                 steps = defaultSteps;
                 Logs.Info($"[SDcpp] Using default Flux steps: {steps}");
             }
