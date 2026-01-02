@@ -92,6 +92,8 @@ public class SDcppBackend : AbstractT2IBackend
                     features.Add("flux-dev");
                     // LoRA only works with q8_0 quantization for Flux
                     features.Add("lora");
+                    // Flux supports ControlNet (experimental)
+                    features.Add("controlnet");
                     break;
 
                 case "sd3":
@@ -104,6 +106,7 @@ public class SDcppBackend : AbstractT2IBackend
                 case "sdxl-turbo":
                     features.Add("sdxl");
                     features.Add("lora");
+                    features.Add("controlnet");
                     if (CurrentModelArchitecture == "sdxl-turbo")
                         features.Add("turbo");
                     break;
@@ -112,6 +115,7 @@ public class SDcppBackend : AbstractT2IBackend
                 case "sd15-turbo":
                 case "sd2":
                     features.Add("lora");
+                    features.Add("controlnet");
                     if (CurrentModelArchitecture.Contains("turbo"))
                         features.Add("turbo");
                     break;
@@ -119,6 +123,7 @@ public class SDcppBackend : AbstractT2IBackend
                 case "lcm":
                     features.Add("lcm");
                     features.Add("lora");
+                    features.Add("controlnet");
                     break;
 
                 case "z-image":
@@ -127,8 +132,9 @@ public class SDcppBackend : AbstractT2IBackend
                     break;
 
                 default:
-                    // Standard models get LoRA support
+                    // Standard models get LoRA and ControlNet support
                     features.Add("lora");
+                    features.Add("controlnet");
                     break;
             }
 
@@ -1263,6 +1269,73 @@ public class SDcppBackend : AbstractT2IBackend
             string maskImagePath = Path.Combine(outputDir, "mask.png");
             File.WriteAllBytes(maskImagePath, maskImage.RawData);
             parameters["mask"] = maskImagePath;
+        }
+
+        // ControlNet support (up to 3 ControlNets)
+        for (int i = 0; i < T2IParamTypes.Controlnets.Length; i++)
+        {
+            var cn = T2IParamTypes.Controlnets[i];
+
+            // Check if this ControlNet is enabled and has a model
+            if (input.TryGet(cn.Model, out T2IModel cnModel) && cnModel != null && cnModel.Name != "(None)")
+            {
+                // Get control image (use ControlNet input image, or fallback to init image)
+                Image controlImage = null;
+                if (input.TryGet(cn.Image, out Image cnImage))
+                {
+                    controlImage = cnImage;
+                }
+                else if (input.TryGet(T2IParamTypes.InitImage, out Image fallbackImage))
+                {
+                    controlImage = fallbackImage;
+                    Logs.Info($"[SDcpp] ControlNet{cn.NameSuffix} using Init Image as control input");
+                }
+
+                if (controlImage != null)
+                {
+                    // Save control image
+                    string controlImagePath = Path.Combine(outputDir, $"control{i + 1}.png");
+                    File.WriteAllBytes(controlImagePath, controlImage.RawData);
+
+                    // SD.cpp currently supports single ControlNet via --control-net and --control-image
+                    // For first ControlNet, use standard parameters
+                    if (i == 0)
+                    {
+                        parameters["control_net"] = cnModel.RawFilePath;
+                        parameters["control_image"] = controlImagePath;
+
+                        // Control strength
+                        if (input.TryGet(cn.Strength, out double strength))
+                        {
+                            parameters["control_strength"] = strength;
+                        }
+
+                        Logs.Info($"[SDcpp] ControlNet enabled: {cnModel.Name}");
+                        Logs.Debug($"[SDcpp] Control image: {controlImagePath}");
+                    }
+                    else
+                    {
+                        // SD.cpp may not support multiple ControlNets simultaneously via CLI
+                        Logs.Warning($"[SDcpp] Multiple ControlNets are not fully supported. Only the first ControlNet will be used.");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Advanced guidance parameters
+        // Flux guidance scale (for Flux models with guidance input)
+        if (isFluxModel && input.TryGet(T2IParamTypes.FluxGuidanceScale, out double fluxGuidance))
+        {
+            parameters["guidance"] = fluxGuidance;
+            Logs.Debug($"[SDcpp] Flux guidance scale: {fluxGuidance}");
+        }
+
+        // TAESD preview decoder (Tiny AutoEncoder for fast decoding)
+        if (SDcppExtension.TAESDParam != null && input.TryGet(SDcppExtension.TAESDParam, out T2IModel taesdModel) && taesdModel != null && taesdModel.Name != "(None)")
+        {
+            parameters["taesd"] = taesdModel.RawFilePath;
+            Logs.Info($"[SDcpp] Using TAESD preview decoder: {taesdModel.Name}");
         }
 
         return parameters;

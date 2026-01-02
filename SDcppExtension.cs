@@ -25,6 +25,7 @@ public class SDcppExtension : Extension
     public static T2IRegisteredParam<bool> VAEOnCPUParam;
     public static T2IRegisteredParam<bool> CLIPOnCPUParam;
     public static T2IRegisteredParam<bool> FlashAttentionParam;
+    public static T2IRegisteredParam<T2IModel> TAESDParam;
 
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
@@ -197,6 +198,17 @@ public class SDcppExtension : Extension
                 {
                     "default", "discrete", "karras", "exponential", "ays", "gits"
                 }
+            ));
+
+            TAESDParam = T2IParamTypes.Register<T2IModel>(new(
+                "TAESD Preview Decoder",
+                "Tiny AutoEncoder for fast preview decoding. Use for quick previews during generation (lower quality but much faster).",
+                "(None)",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: sdcppGroup,
+                Subtype: "VAE",
+                OrderPriority: 5
             ));
 
             Logs.Debug("[SDcppExtension] Parameters registered successfully");

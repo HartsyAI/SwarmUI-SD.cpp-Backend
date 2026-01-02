@@ -746,6 +746,24 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("mask", out var mask) && !string.IsNullOrEmpty(mask.ToString()))
             args.Add($"--mask \"{mask}\"");
 
+        // ControlNet support
+        if (parameters.TryGetValue("control_net", out var controlNet) && !string.IsNullOrEmpty(controlNet.ToString()))
+            args.Add($"--control-net \"{controlNet}\"");
+
+        if (parameters.TryGetValue("control_image", out var controlImage) && !string.IsNullOrEmpty(controlImage.ToString()))
+            args.Add($"--control-image \"{controlImage}\"");
+
+        if (parameters.TryGetValue("control_strength", out var controlStrength))
+            args.Add($"--control-strength {controlStrength}");
+
+        // Advanced guidance parameters
+        if (parameters.TryGetValue("guidance", out var guidance))
+            args.Add($"--guidance {guidance}");
+
+        // TAESD preview decoder
+        if (parameters.TryGetValue("taesd", out var taesd) && !string.IsNullOrEmpty(taesd.ToString()))
+            args.Add($"--taesd \"{taesd}\"");
+
         // LoRA support
         if (parameters.TryGetValue("lora_model_dir", out var loraDir) && !string.IsNullOrEmpty(loraDir.ToString()))
             args.Add($"--lora-model-dir \"{loraDir}\"");
