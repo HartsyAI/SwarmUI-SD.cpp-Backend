@@ -18,8 +18,9 @@ public class SDcppExtension : Extension
     /// <summary>Extension version for compatibility tracking</summary>
     public static new readonly string Version = "0.1.0";
 
-    /// <summary>SD.cpp sampler parameter reference</summary>
+    /// <summary>SD.cpp parameter references</summary>
     public static T2IRegisteredParam<string> SamplerParam;
+    public static T2IRegisteredParam<string> SchedulerParam;
     public static T2IRegisteredParam<bool> VAETilingParam;
     public static T2IRegisteredParam<bool> VAEOnCPUParam;
     public static T2IRegisteredParam<bool> CLIPOnCPUParam;
@@ -180,7 +181,21 @@ public class SDcppExtension : Extension
                 GetValues: (_) => new List<string>
                 {
                     "euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2",
-                    "ipndm", "ipndm_v", "lcm"
+                    "ipndm", "ipndm_v", "lcm", "tcd"
+                }
+            ));
+
+            SchedulerParam = T2IParamTypes.Register<string>(new(
+                "SD.cpp Scheduler",
+                "Scheduler type for SD.cpp backend. Karras is popular for quality. Goes with the Sampler parameter.",
+                "default",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: T2IParamTypes.GroupSampling,
+                OrderPriority: -4,
+                GetValues: (_) => new List<string>
+                {
+                    "default", "discrete", "karras", "exponential", "ays", "gits"
                 }
             ));
 

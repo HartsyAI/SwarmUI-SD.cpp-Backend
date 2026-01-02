@@ -707,6 +707,15 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("sampling_method", out var sampler))
             args.Add($"--sampling-method {sampler}");
 
+        if (parameters.TryGetValue("scheduler", out var scheduler))
+            args.Add($"--scheduler {scheduler}");
+
+        if (parameters.TryGetValue("clip_skip", out var clipSkip))
+            args.Add($"--clip-skip {clipSkip}");
+
+        if (parameters.TryGetValue("batch_count", out var batchCount))
+            args.Add($"--batch-count {batchCount}");
+
         if (parameters.TryGetValue("output", out var output))
             args.Add($"--output \"{output}\"");
 
@@ -733,6 +742,9 @@ public class SDcppProcessManager : IDisposable
 
         if (parameters.TryGetValue("strength", out var strength))
             args.Add($"--strength {strength}");
+
+        if (parameters.TryGetValue("mask", out var mask) && !string.IsNullOrEmpty(mask.ToString()))
+            args.Add($"--mask \"{mask}\"");
 
         // LoRA support
         if (parameters.TryGetValue("lora_model_dir", out var loraDir) && !string.IsNullOrEmpty(loraDir.ToString()))

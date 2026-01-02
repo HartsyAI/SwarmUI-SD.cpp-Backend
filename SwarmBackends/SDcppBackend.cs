@@ -36,6 +36,10 @@ public class SDcppBackend : AbstractT2IBackend
         [ConfigComment("Maximum time to wait for image generation before timing out (in seconds).")]
         public int ProcessTimeoutSeconds = 3600;
 
+        [ConfigComment("Whether SD.cpp should automatically check for updates and download newer versions.\nUpdates are checked at most once per 24 hours to avoid excessive GitHub API usage.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["true", "false"], ManualNames = ["Auto-Update", "Don't Update"])]
+        public string AutoUpdate = "true";
+
         [ConfigComment("Enable debug logging to help troubleshoot issues.")]
         public bool DebugMode = false;
 
@@ -114,6 +118,11 @@ public class SDcppBackend : AbstractT2IBackend
 
                 case "lcm":
                     features.Add("lcm");
+                    features.Add("lora");
+                    break;
+
+                case "z-image":
+                    features.Add("z-image");
                     features.Add("lora");
                     break;
 
@@ -292,7 +301,8 @@ public class SDcppBackend : AbstractT2IBackend
 
             // Ensure SD.cpp is available, download device-specific binary if needed
             AddLoadStatus($"Checking for SD.cpp binary (device: {Settings.Device})...");
-            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath, Settings.Device);
+            bool autoUpdate = Settings.AutoUpdate?.ToLowerInvariant() == "true";
+            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath, Settings.Device, autoUpdate);
             if (updatedExecutablePath != Settings.ExecutablePath)
             {
                 // Update the internal settings with the new path
@@ -313,7 +323,8 @@ public class SDcppBackend : AbstractT2IBackend
 
                     // Try CPU fallback - pass empty string to force download of CPU-specific binary
                     Settings.Device = "cpu";
-                    string cpuExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable("", "cpu");
+                    bool enableAutoUpdate = Settings.AutoUpdate?.ToLowerInvariant() == "true";
+                    string cpuExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable("", "cpu", enableAutoUpdate);
                     if (!string.IsNullOrEmpty(cpuExecutablePath) && File.Exists(cpuExecutablePath))
                     {
                         Settings.ExecutablePath = cpuExecutablePath;
@@ -526,6 +537,12 @@ public class SDcppBackend : AbstractT2IBackend
         // Check for SD3/SD3.5
         if (IsSD3Model(model))
             return "sd3";
+
+        // Check for Z-Image models
+        if (filename.Contains("z_image") || filename.Contains("z-image") ||
+            modelName.Contains("z_image") || modelName.Contains("z-image") ||
+            modelClass.Contains("z-image"))
+            return "z-image";
 
         // Check for SDXL variants
         if (modelClass.Contains("sdxl") || filename.Contains("sdxl"))
@@ -934,6 +951,7 @@ public class SDcppBackend : AbstractT2IBackend
             parameters["seed"] = seed;
         }
 
+        // Sampler
         string swarmSampler = isFluxModel ? "euler" : "euler_a";
         if (SDcppExtension.SamplerParam != null && input.TryGet(SDcppExtension.SamplerParam, out string userSampler))
         {
@@ -947,9 +965,33 @@ public class SDcppBackend : AbstractT2IBackend
         }
         parameters["sampling_method"] = swarmSampler;
 
-        // Model path - Flux and SD3 use multi-component architecture with separate encoders
+        // Scheduler
+        if (SDcppExtension.SchedulerParam != null && input.TryGet(SDcppExtension.SchedulerParam, out string scheduler))
+        {
+            parameters["scheduler"] = scheduler;
+        }
+
+        // CLIP Skip - SwarmUI uses ClipStopAtLayer which is negative, SD.cpp uses --clip-skip which is positive
+        if (input.TryGet(T2IParamTypes.ClipStopAtLayer, out int clipStopLayer))
+        {
+            // Convert from SwarmUI's negative layer (e.g., -1, -2) to SD.cpp's positive skip count
+            int clipSkip = Math.Abs(clipStopLayer);
+            if (clipSkip > 1)
+            {
+                parameters["clip_skip"] = clipSkip;
+            }
+        }
+
+        // Batch generation - SwarmUI's Images parameter maps to SD.cpp's batch-count
+        if (input.TryGet(T2IParamTypes.Images, out int batchCount) && batchCount > 1)
+        {
+            parameters["batch_count"] = batchCount;
+        }
+
+        // Model path - Flux, SD3, and Z-Image use multi-component architecture with separate encoders
         bool isSD3Model = CurrentModelArchitecture == "sd3";
-        bool isMultiComponentModel = isFluxModel || isSD3Model;
+        bool isZImageModel = CurrentModelArchitecture == "z-image";
+        bool isMultiComponentModel = isFluxModel || isSD3Model || isZImageModel;
 
         if (!string.IsNullOrEmpty(CurrentModelName))
         {
@@ -960,7 +1002,8 @@ public class SDcppBackend : AbstractT2IBackend
             {
                 // Multi-component parameters - use SwarmUI's parameter system
                 parameters["diffusion_model"] = mainModel.RawFilePath;
-                Logs.Info($"[SDcpp] Multi-component model detected: {(isFluxModel ? "Flux" : "SD3")}");
+                string archName = isFluxModel ? "Flux" : (isSD3Model ? "SD3" : (isZImageModel ? "Z-Image" : "Multi-Component"));
+                Logs.Info($"[SDcpp] Multi-component model detected: {archName}");
                 Logs.Info($"[SDcpp] Diffusion model path: {mainModel.RawFilePath}");
 
                 // VAE - Required for Flux, optional for SD3 (has built-in VAE)
@@ -1059,31 +1102,72 @@ public class SDcppBackend : AbstractT2IBackend
                     }
                 }
 
-                // T5-XXL - Required for both Flux and SD3
-                if (input.TryGet(T2IParamTypes.T5XXLModel, out T2IModel t5xxlModel) && t5xxlModel != null)
+                // T5-XXL - Required for Flux and SD3, NOT for Z-Image
+                if (!isZImageModel)
                 {
-                    parameters["t5xxl"] = t5xxlModel.RawFilePath;
-                    Logs.Debug($"[SDcpp] Using user-specified T5-XXL: {t5xxlModel.Name}");
-                }
-                else
-                {
-                    var clipModelSet = Program.T2IModelSets["Clip"];
-                    var defaultT5 = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("t5xxl"));
-                    if (defaultT5 != null)
+                    if (input.TryGet(T2IParamTypes.T5XXLModel, out T2IModel t5xxlModel) && t5xxlModel != null)
                     {
-                        parameters["t5xxl"] = defaultT5.RawFilePath;
-                        Logs.Debug($"[SDcpp] Using existing T5-XXL: {defaultT5.Name}");
+                        parameters["t5xxl"] = t5xxlModel.RawFilePath;
+                        Logs.Debug($"[SDcpp] Using user-specified T5-XXL: {t5xxlModel.Name}");
                     }
                     else
                     {
-                        // Auto-download T5-XXL (FP8 version to save space/VRAM)
-                        Logs.Info("[SDcpp] T5-XXL not found, auto-downloading (FP8 version)...");
-                        string t5Path = EnsureModelExists("Clip", "t5xxl_fp8_e4m3fn.safetensors",
-                            "https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
-                            "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09");
-                        if (!string.IsNullOrEmpty(t5Path))
+                        var clipModelSet = Program.T2IModelSets["Clip"];
+                        var defaultT5 = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("t5xxl"));
+                        if (defaultT5 != null)
                         {
-                            parameters["t5xxl"] = t5Path;
+                            parameters["t5xxl"] = defaultT5.RawFilePath;
+                            Logs.Debug($"[SDcpp] Using existing T5-XXL: {defaultT5.Name}");
+                        }
+                        else
+                        {
+                            // Auto-download T5-XXL (FP8 version to save space/VRAM)
+                            Logs.Info("[SDcpp] T5-XXL not found, auto-downloading (FP8 version)...");
+                            string t5Path = EnsureModelExists("Clip", "t5xxl_fp8_e4m3fn.safetensors",
+                                "https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+                                "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09");
+                            if (!string.IsNullOrEmpty(t5Path))
+                            {
+                                parameters["t5xxl"] = t5Path;
+                            }
+                        }
+                    }
+                }
+
+                // LLM - Required ONLY for Z-Image models
+                if (isZImageModel)
+                {
+                    // Z-Image uses Qwen LLM instead of T5-XXL for text encoding
+                    // First try user-specified Qwen model parameter
+                    if (input.TryGet(T2IParamTypes.QwenModel, out T2IModel qwenModel) && qwenModel != null)
+                    {
+                        parameters["llm"] = qwenModel.RawFilePath;
+                        Logs.Debug($"[SDcpp] Using user-specified Qwen model for Z-Image: {qwenModel.Name}");
+                    }
+                    else
+                    {
+                        // Check for existing Qwen model in Clip folder (ComfyUI stores them there)
+                        var clipModelSet = Program.T2IModelSets["Clip"];
+                        var existingQwen = clipModelSet.Models.Values.FirstOrDefault(m =>
+                            m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) ||
+                            m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase));
+
+                        if (existingQwen != null)
+                        {
+                            parameters["llm"] = existingQwen.RawFilePath;
+                            Logs.Debug($"[SDcpp] Using existing Qwen model for Z-Image: {existingQwen.Name}");
+                        }
+                        else
+                        {
+                            // Auto-download Qwen 3 4B model (same as ComfyUI uses for Z-Image)
+                            Logs.Info("[SDcpp] Z-Image requires Qwen model, auto-downloading...");
+                            string qwenPath = EnsureModelExists("Clip", "qwen_3_4b.safetensors",
+                                "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+                                "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
+                            if (!string.IsNullOrEmpty(qwenPath))
+                            {
+                                parameters["llm"] = qwenPath;
+                            }
                         }
                     }
                 }
@@ -1132,6 +1216,24 @@ public class SDcppBackend : AbstractT2IBackend
                     }
                     Logs.Info("[SDcpp] All SD3 components found successfully");
                 }
+                else if (isZImageModel)
+                {
+                    List<string> missing = [];
+                    if (!parameters.ContainsKey("vae")) missing.Add("VAE (flux-ae.safetensors)");
+                    if (!parameters.ContainsKey("llm")) missing.Add("Qwen LLM (qwen_3_4b.safetensors)");
+
+                    if (missing.Count > 0)
+                    {
+                        string errorMsg = $"Z-Image models require additional component files that are not installed.\n\n" +
+                            $"Missing components:\n  • {string.Join("\n  • ", missing)}\n\n" +
+                            $"SwarmUI should auto-download these. If download failed, manually download and place in:\n" +
+                            $"  • VAE → Models/VAE/\n  • Qwen LLM → Models/clip/\n\n" +
+                            $"After downloading, refresh models in SwarmUI and try again.";
+                        Logs.Error($"[SDcpp] {errorMsg}");
+                        throw new InvalidOperationException(errorMsg);
+                    }
+                    Logs.Info("[SDcpp] All Z-Image components found successfully");
+                }
             }
             else if (mainModel != null)
             {
@@ -1153,6 +1255,14 @@ public class SDcppBackend : AbstractT2IBackend
 
             if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
                 parameters["strength"] = strength;
+        }
+
+        // Inpainting/Mask parameters
+        if (input.TryGet(T2IParamTypes.MaskImage, out Image maskImage))
+        {
+            string maskImagePath = Path.Combine(outputDir, "mask.png");
+            File.WriteAllBytes(maskImagePath, maskImage.RawData);
+            parameters["mask"] = maskImagePath;
         }
 
         return parameters;
