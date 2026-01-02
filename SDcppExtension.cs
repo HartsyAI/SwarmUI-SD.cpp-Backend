@@ -26,6 +26,9 @@ public class SDcppExtension : Extension
     public static T2IRegisteredParam<bool> CLIPOnCPUParam;
     public static T2IRegisteredParam<bool> FlashAttentionParam;
     public static T2IRegisteredParam<T2IModel> TAESDParam;
+    public static T2IRegisteredParam<T2IModel> UpscaleModelParam;
+    public static T2IRegisteredParam<int> UpscaleRepeatsParam;
+    public static T2IRegisteredParam<bool> ColorProjectionParam;
 
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
@@ -209,6 +212,41 @@ public class SDcppExtension : Extension
                 Group: sdcppGroup,
                 Subtype: "VAE",
                 OrderPriority: 5
+            ));
+
+            // Upscaling parameters
+            UpscaleModelParam = T2IParamTypes.Register<T2IModel>(new(
+                "ESRGAN Upscale Model",
+                "ESRGAN model for upscaling generated images. Currently supports RealESRGAN_x4plus_anime_6B and similar models.",
+                "(None)",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: sdcppGroup,
+                Subtype: "upscale_model",
+                OrderPriority: 6
+            ));
+
+            UpscaleRepeatsParam = T2IParamTypes.Register<int>(new(
+                "Upscale Repeats",
+                "Number of times to run the ESRGAN upscaler. Higher values = more upscaling but longer processing time.",
+                "1",
+                Min: 1,
+                Max: 4,
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: sdcppGroup,
+                OrderPriority: 7
+            ));
+
+            // Advanced processing parameters
+            ColorProjectionParam = T2IParamTypes.Register<bool>(new(
+                "Color Projection",
+                "Apply color correction to project the generated image colors towards the init image. Useful for maintaining color consistency.",
+                "false",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: sdcppGroup,
+                OrderPriority: 8
             ));
 
             Logs.Debug("[SDcppExtension] Parameters registered successfully");

@@ -1338,6 +1338,27 @@ public class SDcppBackend : AbstractT2IBackend
             Logs.Info($"[SDcpp] Using TAESD preview decoder: {taesdModel.Name}");
         }
 
+        // ESRGAN upscaling
+        if (SDcppExtension.UpscaleModelParam != null && input.TryGet(SDcppExtension.UpscaleModelParam, out T2IModel upscaleModel) && upscaleModel != null && upscaleModel.Name != "(None)")
+        {
+            parameters["upscale_model"] = upscaleModel.RawFilePath;
+            Logs.Info($"[SDcpp] Using ESRGAN upscale model: {upscaleModel.Name}");
+
+            // Upscale repeats (only relevant if upscale model is set)
+            if (SDcppExtension.UpscaleRepeatsParam != null && input.TryGet(SDcppExtension.UpscaleRepeatsParam, out int upscaleRepeats) && upscaleRepeats > 1)
+            {
+                parameters["upscale_repeats"] = upscaleRepeats;
+                Logs.Debug($"[SDcpp] Upscale repeats: {upscaleRepeats}");
+            }
+        }
+
+        // Color projection for init image consistency
+        if (SDcppExtension.ColorProjectionParam != null && input.TryGet(SDcppExtension.ColorProjectionParam, out bool colorProjection) && colorProjection)
+        {
+            parameters["color"] = true;
+            Logs.Debug("[SDcpp] Color projection enabled");
+        }
+
         return parameters;
     }
 

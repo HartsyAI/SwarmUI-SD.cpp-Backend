@@ -764,6 +764,17 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("taesd", out var taesd) && !string.IsNullOrEmpty(taesd.ToString()))
             args.Add($"--taesd \"{taesd}\"");
 
+        // ESRGAN upscaling
+        if (parameters.TryGetValue("upscale_model", out var upscaleModel) && !string.IsNullOrEmpty(upscaleModel.ToString()))
+            args.Add($"--upscale-model \"{upscaleModel}\"");
+
+        if (parameters.TryGetValue("upscale_repeats", out var upscaleRepeats))
+            args.Add($"--upscale-repeats {upscaleRepeats}");
+
+        // Color projection
+        if (parameters.TryGetValue("color", out var color) && color.ToString().ToLowerInvariant() == "true")
+            args.Add("--color");
+
         // LoRA support
         if (parameters.TryGetValue("lora_model_dir", out var loraDir) && !string.IsNullOrEmpty(loraDir.ToString()))
             args.Add($"--lora-model-dir \"{loraDir}\"");
