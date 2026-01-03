@@ -30,6 +30,12 @@ public class SDcppExtension : Extension
     public static T2IRegisteredParam<int> UpscaleRepeatsParam;
     public static T2IRegisteredParam<bool> ColorProjectionParam;
 
+    // Performance optimization parameters
+    public static T2IRegisteredParam<bool> MemoryMapParam;
+    public static T2IRegisteredParam<bool> VAEConvDirectParam;
+    public static T2IRegisteredParam<string> CacheModeParam;
+    public static T2IRegisteredParam<string> CachePresetParam;
+
     /// <summary>
     /// Pre-initialization phase - registers web assets before SwarmUI core initialization.
     /// This runs before the main UI is ready, so we only register static assets here.
@@ -247,6 +253,57 @@ public class SDcppExtension : Extension
                 FeatureFlag: "sdcpp",
                 Group: sdcppGroup,
                 OrderPriority: 8
+            ));
+
+            // Performance optimization parameters
+            T2IParamGroup performanceGroup = new("SD.cpp Performance", Toggles: true, Open: false, OrderPriority: 6, IsAdvanced: true);
+
+            MemoryMapParam = T2IParamTypes.Register<bool>(new(
+                "Memory Map Models",
+                "Memory-map model files for faster loading and reduced RAM usage. Recommended for most systems. Requires SD.cpp master-1896b28 or newer.",
+                "false",
+                Group: performanceGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 1,
+                Toggleable: true
+            ));
+
+            VAEConvDirectParam = T2IParamTypes.Register<bool>(new(
+                "VAE Direct Convolution",
+                "Use direct convolution in VAE decoder for faster processing. Significantly improves decoding speed. Requires SD.cpp master-1896b28 or newer.",
+                "false",
+                Group: performanceGroup,
+                FeatureFlag: "sdcpp",
+                OrderPriority: 2,
+                Toggleable: true
+            ));
+
+            CacheModeParam = T2IParamTypes.Register<string>(new(
+                "Cache Mode",
+                "Inference caching mode for faster generation. 'easycache' is best for Flux/DiT models, 'ucache' for SD/SDXL/UNET models. Can dramatically reduce generation time. Requires SD.cpp master-1896b28 or newer.",
+                "none",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: performanceGroup,
+                OrderPriority: 3,
+                GetValues: (_) => new List<string>
+                {
+                    "none", "auto", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit"
+                }
+            ));
+
+            CachePresetParam = T2IParamTypes.Register<string>(new(
+                "Cache Preset",
+                "Cache quality/speed preset. 'fast' or 'ultra' modes can reduce generation time by 5-10x. Only applies when Cache Mode is enabled.",
+                "fast",
+                Toggleable: true,
+                FeatureFlag: "sdcpp",
+                Group: performanceGroup,
+                OrderPriority: 4,
+                GetValues: (_) => new List<string>
+                {
+                    "slow", "medium", "fast", "ultra"
+                }
             ));
 
             Logs.Debug("[SDcppExtension] Parameters registered successfully");

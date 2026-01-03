@@ -550,6 +550,24 @@ public class SDcppBackend : AbstractT2IBackend
             modelClass.Contains("z-image"))
             return "z-image";
 
+        // Check for video models (Wan 2.1/2.2, LTX-V, etc.)
+        // Wan models
+        if (filename.Contains("wan") || modelName.Contains("wan") || modelClass.Contains("wan"))
+        {
+            // Detect specific Wan variants
+            if (filename.Contains("2.2") || modelName.Contains("2.2") || filename.Contains("2_2") || modelName.Contains("2_2"))
+                return "wan-2.2";
+            if (filename.Contains("2.1") || modelName.Contains("2.1") || filename.Contains("2_1") || modelName.Contains("2_1"))
+                return "wan-2.1";
+            return "wan";  // Generic Wan model
+        }
+
+        // Other video model types
+        if (modelClass.Contains("-i2v") || modelClass.Contains("image2video") || modelClass.Contains("-ti2v") ||
+            modelClass.Contains("-flf2v") || modelClass.Contains("video2world") ||
+            filename.Contains("i2v") || filename.Contains("ti2v") || filename.Contains("flf2v"))
+            return "video";
+
         // Check for SDXL variants
         if (modelClass.Contains("sdxl") || filename.Contains("sdxl"))
         {
@@ -894,6 +912,29 @@ public class SDcppBackend : AbstractT2IBackend
         if (SDcppExtension.FlashAttentionParam is not null)
         {
             parameters["flash_attention"] = input.Get(SDcppExtension.FlashAttentionParam, false, autoFixDefault: true);
+        }
+
+        // Performance optimization flags
+        if (SDcppExtension.MemoryMapParam is not null)
+        {
+            parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
+        }
+        if (SDcppExtension.VAEConvDirectParam is not null)
+        {
+            parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
+        }
+        if (SDcppExtension.CacheModeParam is not null && input.TryGet(SDcppExtension.CacheModeParam, out string cacheMode) && cacheMode != "none")
+        {
+            // Auto-detect best cache mode based on architecture
+            if (cacheMode == "auto")
+            {
+                cacheMode = isFluxModel || CurrentModelArchitecture == "sd3" ? "easycache" : "ucache";
+            }
+            parameters["cache_mode"] = cacheMode;
+        }
+        if (SDcppExtension.CachePresetParam is not null && input.TryGet(SDcppExtension.CachePresetParam, out string cachePreset))
+        {
+            parameters["cache_preset"] = cachePreset;
         }
 
         if (input.TryGet(T2IParamTypes.Prompt, out string prompt))

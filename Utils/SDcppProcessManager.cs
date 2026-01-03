@@ -736,6 +736,24 @@ public class SDcppProcessManager : IDisposable
         if (flashAttention)
             args.Add("--diffusion-fa");
 
+        // Performance optimization flags
+        if (parameters.TryGetValue("mmap", out var mmap) && mmap is bool mmapVal && mmapVal)
+            args.Add("--mmap");
+
+        if (parameters.TryGetValue("vae_conv_direct", out var vaeConvDirect) && vaeConvDirect is bool vaeConvVal && vaeConvVal)
+            args.Add("--vae-conv-direct");
+
+        // Caching optimizations
+        if (parameters.TryGetValue("cache_mode", out var cacheMode) && !string.IsNullOrEmpty(cacheMode.ToString()))
+        {
+            args.Add($"--cache-mode {cacheMode}");
+
+            // Add cache preset if specified
+            if (parameters.TryGetValue("cache_preset", out var cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
+            {
+                args.Add($"--cache-preset {cachePreset}");
+            }
+        }
 
         if (parameters.TryGetValue("init_img", out var initImg) && !string.IsNullOrEmpty(initImg.ToString()))
             args.Add($"--init-img \"{initImg}\"");
