@@ -8,46 +8,30 @@ using SwarmUI.WebAPI;
 
 namespace Hartsy.Extensions.SDcppExtension.WebAPI;
 
-/// <summary>
-/// Provides HTTP API endpoints for managing and monitoring SD.cpp backend instances.
-/// Handles backend status queries, model listing, and settings management for the SwarmUI web interface.
-/// </summary>
+/// <summary>Provides HTTP API endpoints for managing and monitoring SD.cpp backend instances. Handles backend status queries, model listing, and settings management for the SwarmUI web interface.</summary>
 public static class SDcppAPI
 {
-    /// <summary>Permission group for SD.cpp backend operations</summary>
     public static PermInfoGroup SDcppPermGroup = new("SDcpp", "Permissions related to SD.cpp backend operations.");
-
-    /// <summary>Permission for reading SD.cpp backend status and information</summary>
     public static PermInfo PermReadBackendInfo = Permissions.Register(new("sdcpp_read_backend_info", "SD.cpp Read Backend Info", "Allows reading SD.cpp backend status, models, and settings.", PermissionDefault.POWERUSERS, SDcppPermGroup));
-    /// <summary>
-    /// Registers all SD.cpp API endpoints with SwarmUI's API system.
-    /// Called during extension initialization to make endpoints available to the web interface.
-    /// </summary>
+
+    /// <summary>Registers all SD.cpp API endpoints with SwarmUI's API system. Called during extension initialization to make endpoints available to the web interface.</summary>
     public static void Register()
     {
         try
         {
-            Logs.Info("[SDcppAPI] Registering API endpoints");
-
-            // Register API endpoints using the correct pattern
             API.RegisterAPICall(GetBackendStatus, false, PermReadBackendInfo);
             API.RegisterAPICall(ListSDcppModels, false, PermReadBackendInfo);
             API.RegisterAPICall(GetSDcppSettings, false, PermReadBackendInfo);
-
-            Logs.Info("[SDcppAPI] API endpoints registered successfully");
+            Logs.Info("[SDcpp] API endpoints registered successfully");
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDcppAPI] Failed to register API endpoints: {ex.Message}");
+            Logs.Error($"[SDcpp] Failed to register API endpoints: {ex.Message}");
             throw;
         }
     }
 
-    /// <summary>
-    /// Retrieves the current status of all SD.cpp backend instances.
-    /// Returns information about backend state, loaded models, and process health.
-    /// Used by the web interface to display backend status and troubleshoot issues.
-    /// </summary>
+    /// <summary>Retrieves the current status of all SD.cpp backend instances. Returns information about backend state, loaded models, and process health. Used by the web interface to display backend status and troubleshoot issues.</summary>
     /// <param name="session">Current user session for authentication and logging</param>
     /// <returns>JSON object containing status information for all SD.cpp backends</returns>
     public static async Task<JObject> GetBackendStatus(Session session)
@@ -56,7 +40,6 @@ public static class SDcppAPI
         {
             List<SDcppBackend> backends = [.. Program.Backends.RunningBackendsOfType<SDcppBackend>()];
             JArray backendStatuses = [];
-
             foreach (SDcppBackend backend in backends)
             {
                 JObject status = new()
@@ -69,7 +52,6 @@ public static class SDcppAPI
                 };
                 backendStatuses.Add(status);
             }
-
             return SDcppExtension.CreateSuccessResponse(new JObject
             {
                 ["backends"] = backendStatuses,
@@ -78,16 +60,12 @@ public static class SDcppAPI
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDcppAPI] Error getting backend status: {ex.Message}");
+            Logs.Error($"[SDcpp] Error getting backend status: {ex.Message}");
             return SDcppExtension.CreateErrorResponse("Failed to get backend status", "STATUS_ERROR", ex);
         }
     }
 
-    /// <summary>
-    /// Lists available models for SD.cpp backend instances.
-    /// Returns information about model names, titles, file paths, and architectures.
-    /// Used by the web interface to display model options and configure backend instances.
-    /// </summary>
+    /// <summary>Lists available models for SD.cpp backend instances. Returns information about model names, titles, file paths, and architectures. Used by the web interface to display model options and configure backend instances.</summary>
     /// <param name="session">Current user session for authentication and logging</param>
     /// <returns>JSON object containing model information</returns>
     public static async Task<JObject> ListSDcppModels(Session session)
@@ -103,7 +81,6 @@ public static class SDcppAPI
                     ["architecture"] = m.StandardWidth + "x" + m.StandardHeight,
                     ["type"] = m.ModelClass?.ID ?? "unknown"
                 })];
-
             return SDcppExtension.CreateSuccessResponse(new JObject
             {
                 ["models"] = new JArray(models),
@@ -112,23 +89,18 @@ public static class SDcppAPI
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDcppAPI] Error listing models: {ex.Message}");
+            Logs.Error($"[SDcpp] Error listing models: {ex.Message}");
             return SDcppExtension.CreateErrorResponse("Failed to list models", "LIST_MODELS_ERROR", ex);
         }
     }
 
-    /// <summary>
-    /// Retrieves the current settings for SD.cpp backend instances.
-    /// Returns information about executable paths, debug modes, and device configurations.
-    /// Used by the web interface to display and configure backend settings.
-    /// </summary>
+    /// <summary>Retrieves the current settings for SD.cpp backend instances. Returns information about executable paths, debug modes, and device configurations. Used by the web interface to display and configure backend settings.</summary>
     /// <param name="session">Current user session for authentication and logging</param>
     /// <returns>JSON object containing settings information</returns>
     public static async Task<JObject> GetSDcppSettings(Session session)
     {
         try
         {
-            // This is a placeholder - in a full implementation, this would return current settings
             return SDcppExtension.CreateSuccessResponse(new JObject
             {
                 ["settings"] = new JObject
@@ -141,7 +113,7 @@ public static class SDcppAPI
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDcppAPI] Error getting settings: {ex.Message}");
+            Logs.Error($"[SDcpp] Error getting settings: {ex.Message}");
             return SDcppExtension.CreateErrorResponse("Failed to get settings", "GET_SETTINGS_ERROR", ex);
         }
     }
