@@ -1,138 +1,111 @@
 # SwarmUI StableDiffusion.cpp Backend
+===========================================================================
 
-A high-performance backend for SwarmUI using [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) - enabling fast, efficient image generation with Flux, SD3, SDXL, video models, and more in optimized C++/CUDA.
+![SD.cpp Backend](url_to_image_placeholder)
 
-## ✨ Features
+## Table of Contents
+-----------------
 
-### Core Capabilities
-- ✅ **Flux Models** - Full support for FLUX.1-dev, FLUX.1-schnell, and FLUX.2-dev with automatic component management
-- ✅ **SD3/SD3.5** - Complete multi-component architecture support (CLIP-G, CLIP-L, T5-XXL)
-- ✅ **Z-Image Models** - Support for Z-Image Turbo models with Qwen LLM integration
-- ✅ **SDXL/SD1.5/SD2** - Full support for all standard Stable Diffusion architectures
-- ✅ **Video Generation** - Wan 2.1/2.2 video models with text-to-video and image-to-video
-- ✅ **GGUF Format** - Native support for quantized GGUF models (Q2_K, Q4_K, Q8_0, etc.)
-- ✅ **LoRA Support** - Full LoRA integration with automatic directory detection
-- ✅ **ControlNet** - Experimental ControlNet support for compatible models
-- ✅ **Live Previews** - Real-time TAESD preview images during generation
-- ✅ **Auto-Update** - Automatic SD.cpp binary downloads and updates from GitHub releases
+1. [Introduction](#introduction)
+2. [Screenshots (TODO)](#screenshots-todo)
+3. [Features](#features)
+4. [Quick Start](#quick-start)
+5. [Configuration](#configuration)
+6. [Usage Tips](#usage-tips)
+7. [Performance & Caching (TODO)](#performance--caching-todo)
+8. [Troubleshooting](#troubleshooting)
+9. [Architecture Support](#architecture-support)
+10. [Advanced Features](#advanced-features)
+11. [Technical Architecture](#technical-architecture)
+12. [Performance Benchmarks](#performance-benchmarks)
+13. [Contributing](#contributing)
+14. [License](#license)
+15. [Credits](#credits)
 
-### Performance Optimization
-- ✅ **Inference Caching** - cache-dit/ucache/easycache for 5-10x speedup on repeat generations
-- ✅ **Memory Mapping** - `--mmap` for faster model loading and reduced RAM usage
-- ✅ **VAE Optimization** - Direct convolution (`--vae-conv-direct`) for faster decoding
-- ✅ **VAE Tiling** - Reduces VRAM usage by processing in tiles
-- ✅ **CPU Offloading** - Move VAE/CLIP to CPU to save VRAM
-- ✅ **Flash Attention** - Memory-efficient attention mechanism
+## Introduction
+---------------
 
-### Platform Support
-- ✅ **CUDA** - Optimized for NVIDIA GPUs (CUDA 11.x and 12.x with auto-detection)
-- ✅ **CPU** - Universal fallback with AVX/AVX2 support
-- ✅ **Vulkan** - Cross-platform GPU acceleration (experimental for Flux)
+This extension adds a SwarmUI backend powered by [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp). It runs image generation through an external SD.cpp executable (CPU/CUDA/Vulkan) and integrates the results into SwarmUI.
 
-## 🚀 Quick Start
+## Screenshots (TODO)
+-------------------
+
+- **TODO**: Add a screenshot of `Server → Extensions` showing the SD.cpp Backend install/enable button.
+- **TODO**: Add a screenshot of `Server → Backends → SD.cpp Backend` settings (device selection, CUDA version, auto-update).
+- **TODO**: Add a screenshot of the Text-to-Image page using the SD.cpp backend with the SD.cpp parameter groups.
+- **TODO**: Add a screenshot showing live preview output (TAESD) during generation.
+
+## Features
+------------
+
+### Core capabilities
+- **Z-Image Models** - Supports Z-Image Turbo with the required Qwen LLM text encoder.
+- **Flux Models** - Full support for FLUX.1-dev, FLUX.1-schnell, and FLUX.2-dev with automatic component management.
+- **SD3/SD3.5** - Multi-component architecture support (CLIP-G, CLIP-L, T5-XXL) for SD3 family models.
+- **SDXL/SD1.5/SD2** - Compatible with the mainstream Stable Diffusion architectures.
+- **Video Generation** - Wan 2.1/2.2 models provide text-to-video and image-to-video modes.
+- **GGUF Format** - Load quantized GGUF models in common precisions (Q2_K, Q4_K, Q8_0).
+- **LoRA Support** - Automatic LoRA discovery from the Models/Lora directory.
+- **ControlNet (experimental)** - Single ControlNet per job with detection of unsupported setups.
+- **Live Previews** - TAESD previews update frequently during generation. TODO: This needs to be tested.
+- **Auto-Update** - Automatically downloads SD.cpp binaries from GitHub releases when enabled.
+
+### Performance optimizations
+TODO: This needs work. Currently generations are slow even on repeat runs.
+- **Inference Caching** - cache-dit/ucache/easycache integration exists but is currently not delivering the expected speedups.
+- **Memory Mapping** - The `--mmap` option speeds up model loading and reduces RAM usage.
+- **VAE Convolution** - Direct convolution (`--vae-conv-direct`) accelerates decoding.
+- **VAE Tiling** - Breaks down VAE work into tiles to lower VRAM requirements.
+- **CPU Offloading** - Move the VAE and CLIP encoders to CPU when GPU memory is constrained.
+- **Flash Attention** - Optional attention path that saves memory at slight quality cost.
+
+### Platform support
+- **CUDA** - NVIDIA GPUs using the installed CUDA toolkits (11.x, 12.x, or compatible 13.x drivers).
+- **CPU** - AVX/AVX2-compatible fallback.
+- **Vulkan** - Experimental GPU acceleration path that can work on non-NVIDIA hardware (limited Flux support).
+
+## Quick Start
+--------------
 
 ### Installation
 
-1. **Enable the Extension**
-   - This extension comes pre-installed with SwarmUI
-   - Go to `Server → Extensions` in SwarmUI
-   - Enable "SD.cpp Backend"
-   - Restart SwarmUI
+This extension is installed like any other SwarmUI extension.
 
-2. **First Run**
-   - On first launch, the extension will automatically download the SD.cpp binary for your platform
-   - Choose your device (CPU, CUDA, or Vulkan) in the backend settings
-   - The extension will select the appropriate CUDA version automatically
+### Preferred Method (Via SwarmUI)
 
-3. **Add Models**
-   - Place your models in `Models/Stable-Diffusion/`
-   - The backend supports:
-     - GGUF models (Q2_K, Q4_K, Q8_0 quantization)
-     - SafeTensors models
-     - CKPT/BIN files
+1. Open your SwarmUI instance.
+2. Navigate to `Server → Extensions`.
+3. Find "SD.cpp Backend".
+4. Click Install.
+5. Restart SwarmUI when prompted (extensions require a rebuild/restart to load).
 
-## 📦 Model Setup
+### Manual Installation
 
-### Flux Models
+1. Close SwarmUI.
+2. Clone this repository into `SwarmUI/src/Extensions/SwarmUI-SD.cpp-Backend/`.
+3. Restart SwarmUI.
+4. Go to `Server → Extensions` and enable "SD.cpp Backend".
 
-Flux models require four components. The backend will **automatically download** missing components on first use.
+### First Run
 
-**Main Model** (`Models/Stable-Diffusion/`):
-- `flux1-dev-Q2_K.gguf` or `flux1-dev.safetensors`
-- `flux1-schnell-Q4_K.gguf` or `flux1-schnell.safetensors`
-- Download from: [FLUX.1 on Hugging Face](https://huggingface.co/black-forest-labs/FLUX.1-dev)
+1. Open `Server → Backends → SD.cpp Backend`.
+2. Choose your device (CPU, CUDA, or Vulkan).
+3. (CUDA only) Leave CUDA version on Auto unless you know you need 11.x vs 12.x.
+4. On first use, the backend will download the SD.cpp executable for your platform/device.
 
-**VAE** (`Models/VAE/` or auto-download):
-- `ae.safetensors` or `Flux/ae.safetensors`
-- Auto-downloads from: https://huggingface.co/mcmonkey/swarm-vaes
+### Add Models
 
-**Text Encoders** (`Models/clip/` or auto-download):
-- `clip_l.safetensors` - Auto-downloads from Stability AI
-- `t5xxl_fp8_e4m3fn.safetensors` - Auto-downloads (FP8 version for lower VRAM)
+Place your models in `Models/Stable-Diffusion/`. GGUF models go into the `/diffusion_models/` folder. 
 
-**Quantization Recommendations:**
-| VRAM | Quantization | Quality | Speed |
-|------|--------------|---------|-------|
-| 12GB+ | Q8_0 | Highest | Slower |
-| 8-10GB | Q4_K | Good | Fast |
-| 6-8GB | Q4_0 | Fair | Faster |
-| 4-6GB | Q2_K | Lower | Fastest |
+Supported formats include:
+- GGUF models
+- SafeTensors
+- CKPT/BIN
 
-### SD3/SD3.5 Models
+Follow the [SwarmUI Supported Models documentation](https://github.com/kalebbroo/SwarmUI/blob/master/docs/Model%20Support.md ) for more details on properly installing models into Swarm.
 
-SD3 models are similar to Flux:
-
-**Main Model** (`Models/Stable-Diffusion/`):
-- `sd3.5_large.safetensors`
-- `sd3_medium.safetensors`
-
-**Required Components** (auto-download):
-- CLIP-G encoder
-- CLIP-L encoder
-- T5-XXL encoder
-
-### Z-Image Models
-
-Z-Image models use a Qwen LLM instead of T5-XXL:
-
-**Main Model** (`Models/Stable-Diffusion/`):
-- `z_image_turbo.safetensors`
-
-**Required Components** (auto-download):
-- VAE (Flux VAE)
-- Qwen 3 4B LLM (`qwen_3_4b.safetensors`)
-
-### Video Models (Wan 2.1/2.2)
-
-Wan models for video generation:
-
-**Main Model** (`Models/Stable-Diffusion/`):
-- `wan_2.1.safetensors` or `wan_2.2.safetensors`
-
-**Features:**
-- Text-to-video generation
-- Image-to-video animation
-- Dual-model system for Wan 2.2 (high-noise model support)
-- Flow-shift parameter (default 3.0)
-
-### SDXL/SD1.5/SD2 Models
-
-Standard Stable Diffusion models work out of the box:
-
-**Supported Formats:**
-- `.safetensors` (recommended)
-- `.ckpt` (legacy)
-- `.gguf` (quantized)
-
-**Model Types:**
-- SDXL (1024x1024)
-- SDXL-Turbo (4-8 steps)
-- SD 1.5 (512x512)
-- SD 1.5 Turbo
-- SD 2.x (768x768)
-- LCM models
-
-## ⚙️ Configuration
+## Configuration
+-------------
 
 ### Backend Settings
 
@@ -193,17 +166,16 @@ Access settings via `Server → Backends → SD.cpp Backend`
 | Upscale Repeats | `1` | Number of upscale passes |
 | Color Projection | `false` | Color correction for img2img consistency |
 
-## 💡 Usage Tips
+## Usage Tips
+----------
 
-### Flux Best Practices
+## Performance & Caching (TODO)
+------------------------------
 
-1. **CFG Scale**: Always use 1.0 (backend enforces this)
-2. **Sampler**: euler sampler works best (auto-selected)
-3. **Steps**:
-   - Flux-dev: 20+ steps recommended (4-step minimum)
-   - Flux-schnell: 4 steps optimized
-4. **Negative Prompts**: Not effective with Flux models
-5. **Caching**: Enable cache-dit with `ultra` preset for maximum speed on repeat generations
+- **TODO**: The current caching/performance behavior is not acceptable. Identify why repeat generations are not speeding up as expected.
+- **TODO**: Verify and document when `cache-dit`, `ucache`, and `easycache` actually apply, and what models/architectures benefit.
+- **TODO**: Add profiling notes (CPU vs CUDA vs Vulkan), common bottlenecks, and recommended defaults.
+- **TODO**: Add a small troubleshooting matrix for "first run slow" vs "every run slow".
 
 ### Performance Optimization
 
@@ -224,14 +196,11 @@ Access settings via `Server → Backends → SD.cpp Backend`
 
 ### LoRA Usage
 
-LoRA syntax: `<lora:model_name:strength>`
-
-Example: `beautiful landscape <lora:detail-enhancer:0.8>`
+- **TODO**: Test and verify LoRA functionality with various models.
 
 **Important:**
 - Place LoRA files in `Models/Lora/`
 - Backend automatically detects LoRA directory
-- Flux LoRAs work best with Q8_0 quantization
 
 ### Video Generation (Wan Models)
 
@@ -241,49 +210,12 @@ Video-specific parameters:
 - **Flow Shift**: Flow control (default 3.0 for Wan)
 - **Wan 2.2**: Supports dual-model system with high-noise diffusion model
 
-## 🛠️ Troubleshooting
-
-### Slow Generation (2-3 minutes for Flux)
-
-**Problem:** Generation taking much longer than expected
-
-**Solution:**
-1. Ensure you have the latest SD.cpp binary (check version: `master-1896b28` or newer)
-2. Enable performance optimizations:
-   - "Cache Mode" → `auto`
-   - "Cache Preset" → `ultra`
-   - "Memory Map Models" → `true`
-   - "VAE Direct Convolution" → `true`
-3. Use quantized GGUF models (Q4_K or Q8_0)
-4. First generation builds cache (slow), next generations are 5-10x faster
-5. Verify you're using CUDA (not CPU) backend
-6. Check that cache-dit mode is being used (logs will show `--cache-mode cache-dit`)
-
-### Missing Required Components
-
-**Problem:** "Missing components: VAE (ae.safetensors)" or similar
-
-**Solution:**
-- Components should auto-download on first use
-- If download fails, manually download missing files:
-  - VAE: https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/flux_ae.safetensors
-  - CLIP-L: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder/model.fp16.safetensors
-  - T5-XXL: https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors
-- Place in `Models/VAE/` or `Models/clip/`
-- Refresh models in SwarmUI
-
-### CUDA Runtime Error
-
-**Problem:** "SD.cpp CUDA binary failed to start" or missing DLL errors
-
-**Solution:**
-1. Install CUDA 12.x Toolkit: https://developer.nvidia.com/cuda-12-6-0-download-archive
-2. Or switch to CPU backend in settings
-3. Backend will automatically fallback to CPU if CUDA fails
-
+## Troubleshooting
+---------------
 ### No Preview Images
 
 **Problem:** Live previews not showing during generation
+- **TODO**: This is still a work in progress and needs testing.
 
 **Solution:**
 - Backend automatically enables TAESD previews
@@ -301,48 +233,41 @@ Video-specific parameters:
 3. Use lower quantization (Q2_K instead of Q8_0)
 4. Reduce image dimensions
 5. Close other GPU applications
-6. For Flux: Use Q4_0 quantization on 8GB GPUs
 
-### Invalid Scheduler Error
-
-**Problem:** `error: invalid scheduler default`
-
-**Solution:**
-- Leave "SD.cpp Scheduler" parameter empty or untoggled
-- Backend automatically uses SD.cpp's default scheduler
-- If set, use: discrete, karras, exponential, ays, or gits
-
-## 📊 Architecture Support
+## Architecture Support
+--------------------
 
 | Model Type | Status | Notes |
 |------------|--------|-------|
-| **Flux** |
-| FLUX.1-dev | ✅ Full | Requires 4 components, GGUF preferred |
-| FLUX.1-schnell | ✅ Full | 4-step variant |
-| FLUX.2-dev | ✅ Full | Latest Flux architecture |
-| **SD3** |
-| SD3 Medium | ✅ Full | Multi-component like Flux |
-| SD3.5 Large | ✅ Full | Multi-component architecture |
 | **Z-Image** |
-| Z-Image Turbo | ✅ Full | Uses Qwen LLM, auto-downloads components |
+| Z-Image Turbo | Full | Uses Qwen LLM, auto-downloads components |
+| **Flux** |
+| FLUX.1-dev | Full | Requires 4 components, GGUF preferred |
+| FLUX.1-schnell | Full | 4-step variant |
+| FLUX.2-dev | Full | Latest Flux architecture |
+| **SD3** |
+| SD3 Medium | Full | Multi-component like Flux |
+| SD3.5 Large | Full | Multi-component architecture |
 | **SDXL** |
-| SDXL Base | ✅ Full | Standard safetensors/ckpt |
-| SDXL Turbo | ✅ Full | 4-8 step variant |
-| SDXL Lightning | ✅ Full | Fast inference variant |
+| SDXL Base | Full | Standard safetensors/ckpt |
+| SDXL Turbo | Full | 4-8 step variant |
+| SDXL Lightning | Full | Fast inference variant |
 | **SD 1.x/2.x** |
-| SD 1.5 | ✅ Full | 512x512 resolution |
-| SD 1.5 Turbo | ✅ Full | Fast variant |
-| SD 2.x | ✅ Full | 768x768 resolution |
+| SD 1.5 | Full | 512x512 resolution |
+| SD 1.5 Turbo | Full | Fast variant |
+| SD 2.x | Full | 768x768 resolution |
 | **LCM** |
-| LCM Models | ✅ Full | 2-8 step inference |
-| LCM LoRA | ✅ Full | LoRA-based LCM |
+| LCM Models | Full | 2-8 step inference |
+| LCM LoRA | Full | LoRA-based LCM |
 | **Video** |
-| Wan 2.1 | ✅ Full | Text-to-video, image-to-video |
-| Wan 2.2 | ✅ Full | Dual-model system |
+| Wan 2.1 | Full | Text-to-video, image-to-video |
+| Wan 2.2 | Full | Dual-model system |
 
-## 🎨 Advanced Features
+## Advanced Features
+-----------------
 
 ### Img2Img and Inpainting
+- **TODO**: Test and verify img2img and inpainting functionality.
 
 - **Init Image**: Automatic img2img support
 - **Init Image Creativity**: Strength parameter (0.0-1.0)
@@ -356,19 +281,22 @@ Video-specific parameters:
 - Control strength parameter (0.0-2.0)
 
 ### Batch Generation
+- **TODO**: Test and verify batch generation functionality.
 
 - Batch count parameter (generates multiple images)
 - SD.cpp `--batch-count` flag
 - All images saved and returned
 
 ### ESRGAN Upscaling
+- **TODO**: Test and verify ESRGAN upscaling functionality.
 
 - Post-processing upscaler
 - Supports RealESRGAN models
 - Multiple upscale passes supported
 - Place upscale models in `Models/upscale_model/`
 
-## 🏗️ Technical Architecture
+## Technical Architecture
+----------------------
 
 ### Extension Structure
 
@@ -387,13 +315,6 @@ SwarmUI-SD.cpp-Backend/
     └── SDcppAPI.cs                # Additional API endpoints
 ```
 
-### Code Design Principles
-
-- **Separation of Concerns**: Model management, parameter building, and backend logic are separate
-- **SwarmUI Integration**: Uses SwarmUI utilities (`Utilities.DownloadFile`, model management)
-- **Automatic Fallbacks**: CUDA → CPU fallback, auto-component downloads
-- **Clean Architecture**: Reduced from 1391 lines to ~400 lines in main backend
-
 ### File Format Support
 
 **Model Formats:**
@@ -406,59 +327,35 @@ SwarmUI-SD.cpp-Backend/
 - PNG output (default)
 - JPG/JPEG support
 
-## 🔄 Update System
+## Performance Benchmarks
+----------------------
 
-The backend automatically checks for SD.cpp updates on startup:
+- **TODO**: Add benchmark results for CPU vs CUDA vs Vulkan.
+- **TODO**: Include "first run" vs "repeat run" measurements and note when (if ever) caching improves throughput.
+- **TODO**: Provide test settings (model, resolution, steps, sampler, cache settings) so results are reproducible.
 
-1. Queries GitHub API for latest release
-2. Compares with installed version
-3. Downloads newer version if available
-4. Preserves user settings during updates
-
-**Manual Update:**
-- Delete `dlbackend/sdcpp/cuda12/sdcpp_version.json` (or cuda11, cpu, vulkan)
-- Restart SwarmUI
-- Latest version will download automatically
-
-## 📈 Performance Benchmarks
-
-**Flux-dev (1024x1024, 20 steps, Q8_0):**
-| Hardware | First Gen | Cached Gen | Speedup |
-|----------|-----------|------------|---------|
-| RTX 4090 | ~50s | ~8-10s | 5-6x |
-| RTX 3080 | ~80s | ~15-20s | 4-5x |
-| RTX 3060 12GB | ~120s | ~25-30s | 4x |
-
-**Flux-schnell (1024x1024, 4 steps, Q4_K):**
-| Hardware | Time |
-|----------|------|
-| RTX 4090 | ~8-12s |
-| RTX 3080 | ~15-20s |
-| RTX 3060 | ~25-30s |
-
-*With cache-dit mode enabled and ultra preset*
-
-## 🤝 Contributing
+## Contributing
+------------
 
 Contributions welcome! Focus areas:
-- Additional model architecture support (AnimateDiff, etc.)
-- Performance profiling and optimization
+- Performance profiling and optimization Image gen is very slow currently.
 - Better error messages and user guidance
 - UI/UX improvements
+- Swarm parameter fixes
 
-## 📄 License
+## License
+-------
 
 MIT License
 
-## 🙏 Credits
+## Credits
+-------
 
-- [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) by leejet - Core inference engine
-- [SwarmUI](https://github.com/mcmonkeyprojects/SwarmUI) by mcmonkey - UI framework
-- Flux models by [Black Forest Labs](https://huggingface.co/black-forest-labs)
-- SD3 models by [Stability AI](https://stability.ai/)
+- [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) by leejet
+- [SwarmUI](https://github.com/mcmonkeyprojects/SwarmUI) by mcmonkey
 
 ---
 
 **Last Updated:** January 2026
 **Extension Version:** 0.1.0
-**Minimum SD.cpp Version:** master-1896b28 (for full performance features)
+**Minimum SD.cpp Version:** master-1896b28
