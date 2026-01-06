@@ -60,41 +60,65 @@ public class SDcppParameterBuilder
 
     public void AddPerformanceParameters(Dictionary<string, object> parameters, T2IParamInput input)
     {
-        if (SDcppExtension.VAETilingParam is not null)
-            parameters["vae_tiling"] = input.Get(SDcppExtension.VAETilingParam, true, autoFixDefault: true);
-
-        if (SDcppExtension.VAEOnCPUParam is not null)
-            parameters["vae_on_cpu"] = input.Get(SDcppExtension.VAEOnCPUParam, false, autoFixDefault: true);
-
-        if (SDcppExtension.CLIPOnCPUParam is not null)
-            parameters["clip_on_cpu"] = input.Get(SDcppExtension.CLIPOnCPUParam, false, autoFixDefault: true);
-
-        if (SDcppExtension.FlashAttentionParam is not null)
-            parameters["flash_attention"] = input.Get(SDcppExtension.FlashAttentionParam, false, autoFixDefault: true);
-
+        // Memory map is safe default
         if (SDcppExtension.MemoryMapParam is not null)
             parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
 
+        // VAE direct convolution default on
         if (SDcppExtension.VAEConvDirectParam is not null)
             parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
 
-        // Cache mode and preset
-        if (SDcppExtension.CacheModeParam is not null &&
-            input.TryGet(SDcppExtension.CacheModeParam, out string cacheMode) && cacheMode is not "none")
-        {
-            if (cacheMode is "auto")
-            {
-                bool isFluxOrSD3 = CurrentModelArchitecture is "flux" or "sd3";
-                cacheMode = isFluxOrSD3 ? "cache-dit" : "ucache";
-            }
-            parameters["cache_mode"] = cacheMode;
+        // VAE tiling: default on
+        if (SDcppExtension.VAETilingParam is not null)
+            parameters["vae_tiling"] = input.Get(SDcppExtension.VAETilingParam, true, autoFixDefault: true);
 
-            if (cacheMode is "cache-dit" && SDcppExtension.CachePresetParam is not null &&
-                input.TryGet(SDcppExtension.CachePresetParam, out string cachePreset))
-            {
-                parameters["cache_preset"] = cachePreset;
-            }
+        // Auto perf selection
+        bool isFlux = CurrentModelArchitecture is "flux";
+        bool isSD3 = CurrentModelArchitecture is "sd3";
+        bool isDiT = isFlux || isSD3 || CurrentModelArchitecture is "z-image" || CurrentModelArchitecture.Contains("wan");
+        bool isUNet = !(isDiT);
+
+        // Heuristic: identify heavy runs (high res or batch >1)
+        int width = input.Get(T2IParamTypes.Width, 512);
+        int height = input.Get(T2IParamTypes.Height, 512);
+        int batchCount = input.Get(T2IParamTypes.Images, 1);
+        bool highRes = (width >= 768 || height >= 768);
+        bool veryHighRes = (width >= 1024 || height >= 1024);
+        bool heavy = highRes || batchCount > 1;
+        bool veryHeavy = veryHighRes || batchCount > 2;
+
+        string sampler = input.Get(SDcppExtension.SamplerParam, isFlux ? "euler" : "euler_a", autoFixDefault: true);
+
+        // Caching: auto-select per architecture
+        if (isUNet)
+        {
+            parameters["cache_mode"] = "ucache";
+            // sampler-aware reset
+            parameters["cache_option"] = sampler == "euler_a" ? "reset=0" : "reset=1";
         }
+        else if (isDiT)
+        {
+            parameters["cache_mode"] = "cache-dit";
+            parameters["cache_preset"] = "fast";
+        }
+
+        // Flash attention: auto enable by default
+        parameters["flash_attention"] = true;
+
+        // Diffusion conv direct (paired with VAE conv direct)
+        parameters["diffusion_conv_direct"] = true;
+
+        // CPU offload heuristic for VRAM risk
+        bool enableOffload = heavy || isFlux || isSD3;
+        parameters["offload_to_cpu"] = enableOffload;
+
+        // CLIP/VAE on CPU as last resort for very heavy cases
+        bool moveClip = veryHeavy;
+        bool moveVae = veryHeavy && isUNet; // avoid hurting DiT too much
+        if (SDcppExtension.CLIPOnCPUParam is not null)
+            parameters["clip_on_cpu"] = moveClip;
+        if (SDcppExtension.VAEOnCPUParam is not null)
+            parameters["vae_on_cpu"] = moveVae;
     }
 
     public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel)

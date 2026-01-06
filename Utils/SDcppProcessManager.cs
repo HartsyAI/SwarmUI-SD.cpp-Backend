@@ -514,6 +514,8 @@ public class SDcppProcessManager : IDisposable
         bool vaeOnCpu = parameters.TryGetValue("vae_on_cpu", out object vaeOnCpuRaw) && vaeOnCpuRaw is bool vaeOnCpuVal && vaeOnCpuVal;
         bool clipOnCpu = parameters.TryGetValue("clip_on_cpu", out object clipOnCpuRaw) && clipOnCpuRaw is bool clipOnCpuVal && clipOnCpuVal;
         bool flashAttention = parameters.TryGetValue("flash_attention", out object flashAttnRaw) && flashAttnRaw is bool flashAttnVal && flashAttnVal;
+        bool diffusionConvDirect = parameters.TryGetValue("diffusion_conv_direct", out object diffConvRaw) && diffConvRaw is bool diffConvVal && diffConvVal;
+        bool offloadToCpu = parameters.TryGetValue("offload_to_cpu", out object offloadRaw) && offloadRaw is bool offloadVal && offloadVal;
         if (Settings.Device.ToLowerInvariant() == "cpu")
         {
             args.Add("--vae-on-cpu");
@@ -604,6 +606,10 @@ public class SDcppProcessManager : IDisposable
         }
         if (flashAttention)
             args.Add("--diffusion-fa");
+        if (diffusionConvDirect)
+            args.Add("--diffusion-conv-direct");
+        if (offloadToCpu)
+            args.Add("--offload-to-cpu");
         object mmap;
         if (parameters.TryGetValue("mmap", out mmap) && mmap is bool mmapVal && mmapVal)
             args.Add("--mmap");
@@ -614,6 +620,11 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("cache_mode", out cacheMode) && !string.IsNullOrEmpty(cacheMode.ToString()))
         {
             args.Add($"--cache-mode {cacheMode}");
+            object cacheOption;
+            if (parameters.TryGetValue("cache_option", out cacheOption) && !string.IsNullOrEmpty(cacheOption.ToString()))
+            {
+                args.Add($"--cache-option \"{cacheOption}\"");
+            }
             object cachePreset;
             if (parameters.TryGetValue("cache_preset", out cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
             {
