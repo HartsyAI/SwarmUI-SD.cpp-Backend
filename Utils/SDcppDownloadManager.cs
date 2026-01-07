@@ -496,10 +496,16 @@ public static class SDcppDownloadManager
             foreach (string file in Directory.GetFiles(directory))
             {
                 string fileName = Path.GetFileName(file);
-                if (!string.IsNullOrEmpty(fileName) && !fileName.StartsWith("lib") && !fileName.Contains(".so"))
+                string extension = Path.GetExtension(fileName).ToLowerInvariant();
+                if (string.IsNullOrEmpty(fileName) || fileName.StartsWith("lib") || fileName.Contains(".so"))
                 {
-                    return file;
+                    continue;
                 }
+                if (extension is ".json" or ".txt" or ".md")
+                {
+                    continue;
+                }
+                return file;
             }
 
             return null;
