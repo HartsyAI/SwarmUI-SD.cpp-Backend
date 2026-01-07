@@ -5,6 +5,8 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using Newtonsoft.Json.Linq;
 using System.IO;
+using System.Linq;
+using System.Text;
 
 namespace Hartsy.Extensions.SDcppExtension.Utils;
 
@@ -78,12 +80,12 @@ public static class SDcppDownloadManager
     }
 
     /// <summary>Ensures SD.cpp is available for the current platform by downloading the prebuilt binary. Checks for updates and automatically downloads newer versions if enabled in settings.</summary>
-    /// <param name="executablePath">Current configured executable path (if any)</param>
+    /// <param name="currentExecutablePath">Current configured executable path (if any)</param>
     /// <param name="deviceType">Device type (cpu, cuda, vulkan) to determine which binary to download</param>
     /// <param name="cudaVersion">CUDA version preference: "auto", "11", or "12" (only used when deviceType is "cuda")</param>
     /// <param name="autoUpdate">Whether to automatically check for and download updates (default: true)</param>
     /// <returns>Path to the SD.cpp executable</returns>
-    public static async Task<string> EnsureSDcppAvailable(string executablePath, string deviceType = "cpu", string cudaVersion = "auto", bool autoUpdate = true)
+    public static async Task<string> EnsureSDcppAvailable(string currentExecutablePath, string deviceType, string cudaVersion, bool autoUpdate)
     {
         try
         {
@@ -424,6 +426,11 @@ public static class SDcppDownloadManager
                 Logs.Error("[SDcpp] Executable missing after copy to target directory");
                 return null;
             }
+            string launcherPath = finalExecutable;
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                launcherPath = CreateLinuxLauncher(targetDir, finalExecutable);
+            }
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 try
@@ -445,13 +452,34 @@ public static class SDcppDownloadManager
             {
             }
             Logs.Info($"[SDcpp] Extraction complete. Executable: {finalExecutable}");
-            return finalExecutable;
+            return launcherPath;
         }
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error downloading and extracting: {ex.Message}");
             return null;
         }
+    }
+
+    private static string CreateLinuxLauncher(string targetDir, string executablePath)
+    {
+        string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
+        string executableDir = Path.GetDirectoryName(executablePath) ?? targetDir;
+        string relativeExec = Path.GetFileName(executablePath);
+        string script = $"""#!/usr/bin/env bash
+set -euo pipefail
+"LD_LIBRARY_PATH={executableDir}:$LD_LIBRARY_PATH" exec "{executablePath}" "$@"
+""";
+        File.WriteAllText(launcherPath, script, Encoding.UTF8);
+        try
+        {
+            using Process chmod = Process.Start("chmod", $"+x \"{launcherPath}\"");
+            chmod?.WaitForExit();
+        }
+        catch
+        {
+        }
+        return launcherPath;
     }
 
     public static string FindBestExecutableInDirectory(string directory)
