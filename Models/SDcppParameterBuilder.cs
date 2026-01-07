@@ -87,12 +87,15 @@ public class SDcppParameterBuilder
         }
         parameters["flash_attention"] = true;
         parameters["diffusion_conv_direct"] = true;
+
+        // TODO: Find a smarter way to auto enable CPU offloading.
+
         //bool enableOffload = heavy || isFlux || isSD3;
         //parameters["offload_to_cpu"] = enableOffload;
-        bool moveClip = veryHeavy;
-        bool moveVae = veryHeavy && isUNet; // avoid hurting DiT too much
+        //bool moveClip = veryHeavy;
+        //bool moveVae = veryHeavy && isUNet; // avoid hurting DiT too much
         //if (SDcppExtension.CLIPOnCPUParam is not null) parameters["clip_on_cpu"] = moveClip;
-        if (SDcppExtension.VAEOnCPUParam is not null) parameters["vae_on_cpu"] = true;
+        //if (SDcppExtension.VAEOnCPUParam is not null) parameters["vae_on_cpu"] = moveVae;
     }
 
     public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel)
@@ -115,7 +118,6 @@ public class SDcppParameterBuilder
             parameters["negative_prompt"] = negPrompt;
         }
         if (input.TryGet(T2IParamTypes.Width, out int width)) parameters["width"] = width;
-
         if (input.TryGet(T2IParamTypes.Height, out int height)) parameters["height"] = height;
         if (input.TryGet(T2IParamTypes.Steps, out int steps))
         {

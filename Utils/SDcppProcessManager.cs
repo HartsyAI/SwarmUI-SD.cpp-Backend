@@ -1,5 +1,6 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -219,18 +220,24 @@ public class SDcppProcessManager : IDisposable
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                string[] linuxPaths =
+                string[] defaultLinuxBins =
                 [
                     "/usr/local/cuda/bin",
                     "/opt/cuda/bin"
                 ];
-                foreach (string path in linuxPaths)
+                foreach (string path in defaultLinuxBins)
                 {
                     if (Directory.Exists(path))
                     {
                         Logs.Debug($"[SDcpp] Found CUDA bin directory: {path}");
                         return path;
                     }
+                }
+                string binFromVersioned = FindCudaBinFromVersionedDirs(new[] { "/usr/local", "/opt" });
+                if (!string.IsNullOrEmpty(binFromVersioned))
+                {
+                    Logs.Debug($"[SDcpp] Found CUDA bin directory from versioned install: {binFromVersioned}");
+                    return binFromVersioned;
                 }
             }
             return null;
@@ -240,6 +247,52 @@ public class SDcppProcessManager : IDisposable
             Logs.Warning($"[SDcpp] Error while searching for CUDA installation: {ex.Message}");
             return null;
         }
+    }
+
+    private static string FindCudaBinFromVersionedDirs(string[] roots)
+    {
+        List<VersionDir> versionDirs = [];
+        foreach (string root in roots.Where(r => Directory.Exists(r)))
+        {
+            foreach (string dir in Directory.GetDirectories(root))
+            {
+                string version = ExtractCudaVersionFromPath(dir);
+                if (!string.IsNullOrEmpty(version))
+                {
+                    versionDirs.Add(new VersionDir { Path = dir, Version = version });
+                }
+                else if (Path.GetFileName(dir).StartsWith("cuda", StringComparison.OrdinalIgnoreCase))
+                {
+                    string binPath = Path.Combine(dir, "bin");
+                    if (Directory.Exists(binPath))
+                    {
+                        return binPath;
+                    }
+                }
+            }
+        }
+
+        VersionDir best = versionDirs
+            .OrderByDescending(v => ParseVersion(v.Version))
+            .FirstOrDefault();
+        if (best is not null)
+        {
+            string binPath = Path.Combine(best.Path, "bin");
+            if (Directory.Exists(binPath))
+            {
+                return binPath;
+            }
+        }
+        return null;
+    }
+
+    private static double ParseVersion(string version)
+    {
+        if (double.TryParse(version, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+        {
+            return value;
+        }
+        return 0;
     }
 
     /// <summary>Validates that the SD.cpp executable exists at the configured path and is accessible. Called during backend initialization to ensure the backend can function properly.</summary>
