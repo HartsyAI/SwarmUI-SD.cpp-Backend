@@ -18,6 +18,13 @@ public static class SDcppDownloadManager
         "stable-diffusion.cpp.exe"
     ];
 
+    private static readonly string[] UnixExecutableCandidates = [
+        "sd",
+        "stable-diffusion",
+        "stable-diffusion.cpp",
+        "stable-diffusion-cpp"
+    ];
+
     /// <summary>GitHub API endpoint for latest SD.cpp releases</summary>
     private const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
 
@@ -337,7 +344,12 @@ public static class SDcppDownloadManager
             }
             string sourceDir = Path.GetDirectoryName(foundExecutable);
             CopyDirectoryContents(sourceDir, targetDir);
-            string finalExecutable = Path.Combine(targetDir, Path.GetFileName(foundExecutable));
+            string finalExecutable = FindBestExecutableInDirectory(targetDir);
+            if (string.IsNullOrEmpty(finalExecutable))
+            {
+                Logs.Error("[SDcpp] Executable missing after copy to target directory");
+                return null;
+            }
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 try
@@ -397,8 +409,25 @@ public static class SDcppDownloadManager
                 }
                 return null;
             }
-            // Unix-like: should be sd
-            return FindExecutableInDirectory(directory, "sd");
+            foreach (string exe in UnixExecutableCandidates)
+            {
+                string found = FindExecutableInDirectory(directory, exe);
+                if (!string.IsNullOrEmpty(found))
+                {
+                    return found;
+                }
+            }
+
+            foreach (string file in Directory.GetFiles(directory))
+            {
+                string fileName = Path.GetFileName(file);
+                if (!string.IsNullOrEmpty(fileName) && !fileName.StartsWith("lib") && !fileName.Contains(".so"))
+                {
+                    return file;
+                }
+            }
+
+            return null;
         }
         catch (Exception ex)
         {
