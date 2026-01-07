@@ -245,9 +245,28 @@ public class SDcppProcessManager : IDisposable
     private static string FindCudaBinFromVersionedDirs(string[] roots)
     {
         List<VersionDir> versionDirs = [];
-        foreach (string root in roots.Where(r => Directory.Exists(r)))
+        foreach (string root in roots)
         {
-            foreach (string dir in Directory.GetDirectories(root))
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+            string[] dirs;
+            try
+            {
+                dirs = Directory.GetDirectories(root);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Logs.Warning($"[SDcpp] Access to path '{root}' denied while scanning for CUDA installations: {ex.Message}");
+                continue;
+            }
+            catch (Exception ex)
+            {
+                Logs.Warning($"[SDcpp] Error while scanning '{root}' for CUDA installations: {ex.Message}");
+                continue;
+            }
+            foreach (string dir in dirs)
             {
                 string version = ExtractCudaVersionFromPath(dir);
                 if (!string.IsNullOrEmpty(version))

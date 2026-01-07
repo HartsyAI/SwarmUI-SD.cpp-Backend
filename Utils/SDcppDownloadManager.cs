@@ -417,8 +417,7 @@ public static class SDcppDownloadManager
                 Logs.Error("[SDcpp] Could not find SD.cpp executable in extracted files");
                 return null;
             }
-            string sourceDir = Path.GetDirectoryName(foundExecutable);
-            CopyDirectoryContents(sourceDir, targetDir);
+            CopyDirectoryContents(tempExtractDir, targetDir);
             string finalExecutable = FindBestExecutableInDirectory(targetDir);
             if (string.IsNullOrEmpty(finalExecutable))
             {
