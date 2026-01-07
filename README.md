@@ -91,7 +91,7 @@ This extension is installed like any other SwarmUI extension.
 1. Open `Server → Backends → SD.cpp Backend`.
 2. Choose your device (CPU, CUDA, or Vulkan).
 3. (CUDA only) Leave CUDA version on Auto unless you know you need 11.x vs 12.x.
-4. On first use, the backend will download the SD.cpp executable for your platform/device.
+4. The installer downloads the SD.cpp release into `dlbackend/sdcpp/{device}` and then creates a `run-sd-server.sh` wrapper on Linux that always sets `LD_LIBRARY_PATH` to the binary directory before launching, so the bundled shared libraries (e.g. `libstable-diffusion.so`) are resolvable even on clean systems.
 
 ### Add Models
 

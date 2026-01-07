@@ -139,20 +139,20 @@ public static class SDcppDownloadManager
                     return existing;
                 }
             }
-            if (!string.IsNullOrEmpty(executablePath) && File.Exists(executablePath))
+            if (!string.IsNullOrEmpty(currentExecutablePath) && File.Exists(currentExecutablePath))
             {
-                string execDir = Path.GetDirectoryName(executablePath) ?? "";
+                string execDir = Path.GetDirectoryName(currentExecutablePath) ?? "";
                 string expectedDirName = deviceType == "cuda" ? $"cuda{resolvedCudaVersion}" : deviceType;
                 bool isDeviceMatch = execDir.EndsWith(expectedDirName, StringComparison.OrdinalIgnoreCase) ||
                                      !execDir.Contains("sdcpp");
                 if (isDeviceMatch)
                 {
-                    Logs.Info($"[SDcpp] Using user-specified executable: {executablePath}");
-                    return executablePath;
+                    Logs.Info($"[SDcpp] Using user-specified executable: {currentExecutablePath}");
+                    return currentExecutablePath;
                 }
                 else
                 {
-                    Logs.Info($"[SDcpp] Ignoring cached executable (wrong device/CUDA version): {executablePath}");
+                    Logs.Info($"[SDcpp] Ignoring cached executable (wrong device/CUDA version): {currentExecutablePath}");
                     Logs.Info($"[SDcpp] Need to download {deviceType} binary...");
                 }
             }
@@ -466,10 +466,7 @@ public static class SDcppDownloadManager
         string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
         string executableDir = Path.GetDirectoryName(executablePath) ?? targetDir;
         string relativeExec = Path.GetFileName(executablePath);
-        string script = $"""#!/usr/bin/env bash
-set -euo pipefail
-"LD_LIBRARY_PATH={executableDir}:$LD_LIBRARY_PATH" exec "{executablePath}" "$@"
-""";
+        string script = $$"""#!/usr/bin/env bash set -euo pipefail LD_LIBRARY_PATH={{executableDir}}:$LD_LIBRARY_PATH exec "{{executablePath}}" "$@" """;
         File.WriteAllText(launcherPath, script, Encoding.UTF8);
         try
         {
