@@ -693,6 +693,17 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                string execDir = Path.GetDirectoryName(Settings.ExecutablePath);
+                if (!string.IsNullOrEmpty(execDir))
+                {
+                    string existing = processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] ?? Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "";
+                    string newValue = string.IsNullOrEmpty(existing) ? execDir : $"{execDir}:{existing}";
+                    processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] = newValue;
+                    Logs.Debug($"[SDcpp] Added executable directory to LD_LIBRARY_PATH: {execDir}");
+                }
+            }
             if (Settings.Device.ToLowerInvariant() == "cpu")
             {
                 processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
