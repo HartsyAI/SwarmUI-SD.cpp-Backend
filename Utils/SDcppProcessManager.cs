@@ -347,6 +347,8 @@ public class SDcppProcessManager : IDisposable
             if (isCuda && !shouldCheckCuda)
             {
                 Logs.Info("[SDcpp] CUDA version manually selected, skipping toolkit auto-detection.");
+                Logs.Info("[SDcpp] Skipping runtime validation because CUDA version is manually configured.");
+                return true;
             }
             if (shouldCheckCuda)
             {
