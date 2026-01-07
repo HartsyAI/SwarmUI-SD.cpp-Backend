@@ -128,7 +128,7 @@ public static class SDcppDownloadManager
                 {
                     Logs.Debug("[SDcpp] Auto-update disabled, skipping update check");
                 }
-                return expectedExecutable;
+                return EnsureLinuxLauncher(targetDir, expectedExecutable);
             }
             if (Directory.Exists(deviceDir))
             {
@@ -136,7 +136,7 @@ public static class SDcppDownloadManager
                 if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
                 {
                     Logs.Info($"[SDcpp] Found existing SD.cpp executable (non-standard name): {existing}");
-                    return existing;
+                    return EnsureLinuxLauncher(targetDir, existing);
                 }
             }
             if (!string.IsNullOrEmpty(currentExecutablePath) && File.Exists(currentExecutablePath))
@@ -148,7 +148,7 @@ public static class SDcppDownloadManager
                 if (isDeviceMatch)
                 {
                     Logs.Info($"[SDcpp] Using user-specified executable: {currentExecutablePath}");
-                    return currentExecutablePath;
+                    return EnsureLinuxLauncher(targetDir, currentExecutablePath);
                 }
                 else
                 {
@@ -465,8 +465,10 @@ public static class SDcppDownloadManager
     {
         string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
         string executableDir = Path.GetDirectoryName(executablePath) ?? targetDir;
-        string relativeExec = Path.GetFileName(executablePath);
-        string script = $$"""#!/usr/bin/env bash set -euo pipefail LD_LIBRARY_PATH={{executableDir}}:$LD_LIBRARY_PATH exec "{{executablePath}}" "$@" """;
+        string script =
+            $"#!/usr/bin/env bash\n" +
+            $"set -euo pipefail\n" +
+            $"LD_LIBRARY_PATH={executableDir}:$LD_LIBRARY_PATH exec \"{executablePath}\" \"$@\"\n";
         File.WriteAllText(launcherPath, script, Encoding.UTF8);
         try
         {
