@@ -36,9 +36,9 @@ public static class SDcppDownloadManager
     /// <summary>Version info file to track installed SD.cpp version</summary>
     private const string VERSION_INFO_FILE = "sdcpp_version.json";
 
-    /// <summary>Resolves the CUDA version to use based on user setting and system detection. Handles "auto" by detecting installed CUDA, or validates explicit versions.</summary>
+    /// <summary>Resolves the CUDA version to use based on user setting.</summary>
     /// <param name="cudaVersionSetting">User's CUDA version preference: "auto", "11", or "12"</param>
-    /// <returns>Resolved CUDA version string ("11" or "12"), defaults to "12" if detection fails</returns>
+    /// <returns>Resolved CUDA version string ("11" or "12"), defaults to "12" for auto</returns>
     public static string ResolveCudaVersion(string cudaVersionSetting)
     {
         cudaVersionSetting = (cudaVersionSetting ?? "auto").ToLowerInvariant().Trim();
@@ -47,35 +47,7 @@ public static class SDcppDownloadManager
             Logs.Info($"[SDcpp] Using explicitly configured CUDA version: {cudaVersionSetting}");
             return cudaVersionSetting;
         }
-        Logs.Info("[SDcpp] Auto-detecting CUDA version...");
-        (string detectedVersion, string detectedPath) = SDcppProcessManager.DetectInstalledCudaVersion();
-        if (!string.IsNullOrEmpty(detectedVersion))
-        {
-            Logs.Info($"[SDcpp] Detected CUDA installation: {detectedVersion} at {detectedPath}");
-            if (detectedVersion.StartsWith("11"))
-            {
-                Logs.Info("[SDcpp] Auto-selected CUDA 11.x build");
-                return "11";
-            }
-            else if (detectedVersion.StartsWith("12"))
-            {
-                Logs.Info("[SDcpp] Auto-selected CUDA 12.x build");
-                return "12";
-            }
-            else if (detectedVersion.StartsWith("13"))
-            {
-                // CUDA 13 drivers are backward compatible with CUDA 12 binaries
-                Logs.Info("[SDcpp] Detected CUDA 13.x - using CUDA 12 build (forward compatible)");
-                return "12";
-            }
-            else
-            {
-                Logs.Warning($"[SDcpp] Unrecognized CUDA version: {detectedVersion}, defaulting to CUDA 12");
-                return "12";
-            }
-        }
-        Logs.Warning("[SDcpp] No CUDA installation detected, defaulting to CUDA 12 build");
-        Logs.Warning("[SDcpp] If you have CUDA installed, ensure CUDA_PATH environment variable is set");
+        Logs.Info("[SDcpp] Auto mode: defaulting to CUDA 12 build");
         return "12";
     }
 
@@ -112,12 +84,15 @@ public static class SDcppDownloadManager
                     if (shouldUpdate)
                     {
                         Logs.Info("[SDcpp] Newer version available, downloading update...");
-                        string updatedExecutable = await DownloadLatestVersion(deviceType, resolvedCudaVersion, deviceDir, versionInfoPath);
-                        if (!string.IsNullOrEmpty(updatedExecutable))
+                        try
                         {
-                            return updatedExecutable;
+                            string updatedExecutable = await DownloadLatestVersion(deviceType, resolvedCudaVersion, deviceDir, versionInfoPath);
+                            if (!string.IsNullOrEmpty(updatedExecutable))
+                            {
+                                return updatedExecutable;
+                            }
                         }
-                        else
+                        catch
                         {
                             Logs.Warning("[SDcpp] Update failed, continuing with existing version");
                             return expectedExecutable;
@@ -128,7 +103,7 @@ public static class SDcppDownloadManager
                 {
                     Logs.Debug("[SDcpp] Auto-update disabled, skipping update check");
                 }
-                return EnsureLinuxLauncher(deviceDir, expectedExecutable);
+                return expectedExecutable;
             }
             if (Directory.Exists(deviceDir))
             {
@@ -136,7 +111,7 @@ public static class SDcppDownloadManager
                 if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
                 {
                     Logs.Info($"[SDcpp] Found existing SD.cpp executable (non-standard name): {existing}");
-                    return EnsureLinuxLauncher(deviceDir, existing);
+                    return existing;
                 }
             }
             if (!string.IsNullOrEmpty(currentExecutablePath) && File.Exists(currentExecutablePath))
@@ -148,7 +123,7 @@ public static class SDcppDownloadManager
                 if (isDeviceMatch)
                 {
                     Logs.Info($"[SDcpp] Using user-specified executable: {currentExecutablePath}");
-                    return EnsureLinuxLauncher(deviceDir, currentExecutablePath);
+                    return currentExecutablePath;
                 }
                 else
                 {
@@ -425,11 +400,6 @@ public static class SDcppDownloadManager
                 Logs.Error("[SDcpp] Executable missing after copy to target directory");
                 return null;
             }
-            string launcherPath = finalExecutable;
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                launcherPath = CreateLinuxLauncher(targetDir, finalExecutable);
-            }
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 try
@@ -451,49 +421,13 @@ public static class SDcppDownloadManager
             {
             }
             Logs.Info($"[SDcpp] Extraction complete. Executable: {finalExecutable}");
-            return launcherPath;
+            return finalExecutable;
         }
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error downloading and extracting: {ex.Message}");
             return null;
         }
-    }
-
-    private static string CreateLinuxLauncher(string targetDir, string executablePath)
-    {
-        string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
-        string executableDir = Path.GetDirectoryName(executablePath) ?? targetDir;
-        string script =
-            $"#!/usr/bin/env bash\n" +
-            $"set -euo pipefail\n" +
-            $"LD_LIBRARY_PATH={executableDir}:$LD_LIBRARY_PATH exec \"{executablePath}\" \"$@\"\n";
-        File.WriteAllText(launcherPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        try
-        {
-            using Process chmod = Process.Start("chmod", $"+x \"{launcherPath}\"");
-            chmod?.WaitForExit();
-        }
-        catch
-        {
-        }
-        return launcherPath;
-    }
-
-    private static string EnsureLinuxLauncher(string targetDir, string executablePath)
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            return executablePath;
-        }
-
-        string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
-        if (File.Exists(launcherPath))
-        {
-            return launcherPath;
-        }
-
-        return CreateLinuxLauncher(targetDir, executablePath);
     }
 
     public static string FindBestExecutableInDirectory(string directory)
@@ -553,7 +487,7 @@ public static class SDcppDownloadManager
         }
         catch (Exception ex)
         {
-            Logs.Warning($"[SDcpp] Error searching for executable: {ex.Message}");
+            Logs.Warning($"[SDcpp] Error while searching for executable in '{directory}': {ex.Message}");
             return null;
         }
     }

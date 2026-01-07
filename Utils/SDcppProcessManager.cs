@@ -1,6 +1,5 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -17,12 +16,13 @@ public class SDcppProcessManager : IDisposable
     public readonly string WorkingDirectory;
     public bool Disposed = false;
 
-    private const string REQUIRED_CUDA_VERSION = "12";
-
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
         Settings = settings;
-        WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory) ? Path.GetTempPath() : settings.WorkingDirectory;
+        string exeDir = string.IsNullOrEmpty(settings.ExecutablePath) ? null : Path.GetDirectoryName(settings.ExecutablePath);
+        WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory)
+            ? (string.IsNullOrEmpty(exeDir) ? Path.GetTempPath() : exeDir)
+            : settings.WorkingDirectory;
         Directory.CreateDirectory(WorkingDirectory);
     }
 
@@ -51,259 +51,8 @@ public class SDcppProcessManager : IDisposable
         {
             sb.AppendLine("  No NVIDIA GPU detected via nvidia-smi");
         }
-        sb.AppendLine($"\n--- CUDA Installation ---");
-        (string cudaVersion, string cudaPath) = DetectInstalledCudaVersion();
-        if (!string.IsNullOrEmpty(cudaVersion))
-        {
-            sb.AppendLine($"  Installed CUDA Version: {cudaVersion}");
-            sb.AppendLine($"  CUDA Path: {cudaPath}");
-            if (!cudaVersion.StartsWith(REQUIRED_CUDA_VERSION))
-            {
-                sb.AppendLine($"  ⚠️ WARNING: SD.cpp CUDA build requires CUDA {REQUIRED_CUDA_VERSION}.x");
-            }
-            else
-            {
-                sb.AppendLine($"  ✓ CUDA version is compatible with SD.cpp");
-            }
-        }
-        else
-        {
-            sb.AppendLine("  No CUDA installation detected");
-            sb.AppendLine($"  Required: CUDA {REQUIRED_CUDA_VERSION}.x runtime");
-        }
-        string cudaPathEnv = Environment.GetEnvironmentVariable("CUDA_PATH");
-        sb.AppendLine($"\n--- Environment Variables ---");
-        sb.AppendLine($"  CUDA_PATH: {cudaPathEnv ?? "(not set)"}");
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            sb.AppendLine($"\n--- CUDA Runtime DLL Check ---");
-            string[] criticalDlls = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"];
-            string systemPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-            foreach (string dll in criticalDlls)
-            {
-                bool found = false;
-                if (!string.IsNullOrEmpty(cudaPath))
-                {
-                    string dllPath = Path.Combine(cudaPath, "bin", dll);
-                    if (File.Exists(dllPath))
-                    {
-                        sb.AppendLine($"  ✓ {dll} found at: {dllPath}");
-                        found = true;
-                    }
-                }
-                string system32Path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), dll);
-                if (File.Exists(system32Path))
-                {
-                    sb.AppendLine($"  ✓ {dll} found at: {system32Path}");
-                    found = true;
-                }
-                if (!found)
-                {
-                    sb.AppendLine($"  ✗ {dll} NOT FOUND - this is required for CUDA {REQUIRED_CUDA_VERSION}");
-                }
-            }
-        }
         sb.AppendLine("================================");
         return sb.ToString();
-    }
-
-    /// <summary>Detects the installed CUDA version by checking environment variables and common install paths.</summary>
-    /// <returns>Tuple of (version string, installation path) or (null, null) if not found</returns>
-    public static (string Version, string Path) DetectInstalledCudaVersion()
-    {
-        try
-        {
-            string cudaPath = Environment.GetEnvironmentVariable("CUDA_PATH");
-            if (!string.IsNullOrEmpty(cudaPath) && Directory.Exists(cudaPath))
-            {
-                string version = ExtractCudaVersionFromPath(cudaPath);
-                if (!string.IsNullOrEmpty(version))
-                {
-                    return (version, cudaPath);
-                }
-            }
-            try
-            {
-                ProcessStartInfo psi = new()
-                {
-                    FileName = "nvcc",
-                    Arguments = "--version",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using Process proc = Process.Start(psi);
-                if (proc != null)
-                {
-                    string output = proc.StandardOutput.ReadToEnd();
-                    proc.WaitForExit(5000);
-                    System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(output, @"release\s+(\d+\.\d+)");
-                    if (match.Success)
-                    {
-                        return (match.Groups[1].Value, cudaPath ?? "nvcc in PATH");
-                    }
-                }
-            }
-            catch
-            {
-            }
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-                string cudaRoot = Path.Combine(programFiles, "NVIDIA GPU Computing Toolkit", "CUDA");
-                if (Directory.Exists(cudaRoot))
-                {
-                    List<VersionDir> versionDirs = [.. Directory.GetDirectories(cudaRoot).Select(d => new VersionDir { Path = d, Version = ExtractCudaVersionFromPath(d) })
-                        .Where(x => !string.IsNullOrEmpty(x.Version)).OrderByDescending(x => x.Version)];
-                    if (versionDirs.Count > 0)
-                    {
-                        return (versionDirs[0].Version, versionDirs[0].Path);
-                    }
-                }
-            }
-            return (null, null);
-        }
-        catch (Exception ex)
-        {
-            Logs.Debug($"[SDcpp] Error detecting CUDA version: {ex.Message}");
-            return (null, null);
-        }
-    }
-
-    /// <summary>Extracts CUDA version number from a path like "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2"</summary>
-    public static string ExtractCudaVersionFromPath(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(path, @"v?(\d+\.\d+)");
-        return match.Success ? match.Groups[1].Value : null;
-    }
-
-    /// <summary>Attempts to find the CUDA Toolkit installation directory and returns the bin path. Checks common installation locations and environment variables.</summary>
-    public static string FindCudaBinDirectory()
-    {
-        try
-        {
-            string cudaPath = Environment.GetEnvironmentVariable("CUDA_PATH");
-            if (!string.IsNullOrEmpty(cudaPath))
-            {
-                string binPath = Path.Combine(cudaPath, "bin");
-                if (Directory.Exists(binPath))
-                {
-                    Logs.Debug($"[SDcpp] Found CUDA bin directory via CUDA_PATH: {binPath}");
-                    return binPath;
-                }
-            }
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-                string cudaRoot = Path.Combine(programFiles, "NVIDIA GPU Computing Toolkit", "CUDA");
-                if (Directory.Exists(cudaRoot))
-                {
-                    List<string> versionDirs = [.. Directory.GetDirectories(cudaRoot).OrderByDescending(d => d)];
-                    foreach (string versionDir in versionDirs)
-                    {
-                        string binPath = Path.Combine(versionDir, "bin");
-                        if (Directory.Exists(binPath))
-                        {
-                            Logs.Debug($"[SDcpp] Found CUDA bin directory: {binPath}");
-                            return binPath;
-                        }
-                    }
-                }
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                string[] defaultLinuxBins =
-                [
-                    "/usr/local/cuda/bin",
-                    "/opt/cuda/bin"
-                ];
-                foreach (string path in defaultLinuxBins)
-                {
-                    if (Directory.Exists(path))
-                    {
-                        Logs.Debug($"[SDcpp] Found CUDA bin directory: {path}");
-                        return path;
-                    }
-                }
-                string binFromVersioned = FindCudaBinFromVersionedDirs(["/usr/local", "/opt"]);
-                if (!string.IsNullOrEmpty(binFromVersioned))
-                {
-                    Logs.Debug($"[SDcpp] Found CUDA bin directory from versioned install: {binFromVersioned}");
-                    return binFromVersioned;
-                }
-            }
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Logs.Warning($"[SDcpp] Error while searching for CUDA installation: {ex.Message}");
-            return null;
-        }
-    }
-
-    private static string FindCudaBinFromVersionedDirs(string[] roots)
-    {
-        List<VersionDir> versionDirs = [];
-        foreach (string root in roots)
-        {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-            string[] dirs;
-            try
-            {
-                dirs = Directory.GetDirectories(root);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                Logs.Warning($"[SDcpp] Access to path '{root}' denied while scanning for CUDA installations: {ex.Message}");
-                continue;
-            }
-            catch (Exception ex)
-            {
-                Logs.Warning($"[SDcpp] Error while scanning '{root}' for CUDA installations: {ex.Message}");
-                continue;
-            }
-            foreach (string dir in dirs)
-            {
-                string version = ExtractCudaVersionFromPath(dir);
-                if (!string.IsNullOrEmpty(version))
-                {
-                    versionDirs.Add(new VersionDir { Path = dir, Version = version });
-                }
-                else if (Path.GetFileName(dir).StartsWith("cuda", StringComparison.OrdinalIgnoreCase))
-                {
-                    string binPath = Path.Combine(dir, "bin");
-                    if (Directory.Exists(binPath))
-                    {
-                        return binPath;
-                    }
-                }
-            }
-        }
-
-        VersionDir best = versionDirs.OrderByDescending(v => ParseVersion(v.Version)).FirstOrDefault();
-        if (best is not null)
-        {
-            string binPath = Path.Combine(best.Path, "bin");
-            if (Directory.Exists(binPath))
-            {
-                return binPath;
-            }
-        }
-        return null;
-    }
-
-    public static double ParseVersion(string version)
-    {
-        if (double.TryParse(version, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
-        {
-            return value;
-        }
-        return 0;
     }
 
     /// <summary>Validates that the SD.cpp executable exists at the configured path and is accessible. Called during backend initialization to ensure the backend can function properly.</summary>
@@ -336,44 +85,12 @@ public class SDcppProcessManager : IDisposable
     {
         errorMessage = null;
         bool isCuda = Settings.Device.Equals("cuda", StringComparison.InvariantCultureIgnoreCase);
-        const string CudaDownloadUrl = "https://developer.nvidia.com/cuda-12-6-0-download-archive";
         try
         {
             if (!ValidateExecutable())
             {
                 errorMessage = "SD.cpp executable is missing or not configured.";
                 return false;
-            }
-            bool shouldCheckCuda = isCuda && string.Equals(Settings.CudaVersion ?? "auto", "auto", StringComparison.OrdinalIgnoreCase);
-            if (isCuda && !shouldCheckCuda)
-            {
-                Logs.Info("[SDcpp] CUDA version manually selected, skipping toolkit auto-detection.");
-                Logs.Info("[SDcpp] Skipping runtime validation because CUDA version is manually configured.");
-                return true;
-            }
-            if (shouldCheckCuda)
-            {
-                (string cudaVersion, string cudaPath) = DetectInstalledCudaVersion();
-                Logs.Info($"[SDcpp] Validating CUDA runtime for SD.cpp...");
-                Logs.Info($"[SDcpp] Detected CUDA version: {cudaVersion ?? "NOT FOUND"}");
-                Logs.Info($"[SDcpp] CUDA path: {cudaPath ?? "NOT FOUND"}");
-                Logs.Info($"[SDcpp] Required CUDA version: {REQUIRED_CUDA_VERSION}.x");
-                if (string.IsNullOrEmpty(cudaVersion))
-                {
-                    Logs.Warning($"[SDcpp] No CUDA installation detected. SD.cpp CUDA build requires CUDA {REQUIRED_CUDA_VERSION} runtime.");
-                }
-                else if (!cudaVersion.StartsWith(REQUIRED_CUDA_VERSION))
-                {
-                    Logs.Warning($"[SDcpp] CUDA version mismatch: installed {cudaVersion}, required {REQUIRED_CUDA_VERSION}.x or higher");
-                    if (int.TryParse(cudaVersion.Split('.')[0], out int majorVersion) && majorVersion >= 13)
-                    {
-                        Logs.Info($"[SDcpp] CUDA {cudaVersion} detected. Backward compatible with CUDA {REQUIRED_CUDA_VERSION}.x binaries.");
-                    }
-                    else
-                    {
-                        Logs.Warning($"[SDcpp] CUDA version mismatch: installed {cudaVersion}, required {REQUIRED_CUDA_VERSION}.x or higher");
-                    }
-                }
             }
             ProcessStartInfo psi = new()
             {
@@ -385,20 +102,6 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            if (isCuda)
-            {
-                string cudaBinPath = FindCudaBinDirectory();
-                if (!string.IsNullOrEmpty(cudaBinPath))
-                {
-                    string currentPath = psi.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH");
-                    psi.EnvironmentVariables["PATH"] = $"{cudaBinPath};{currentPath}";
-                    Logs.Debug($"[SDcpp] Added CUDA bin to PATH for validation: {cudaBinPath}");
-                }
-                else
-                {
-                    Logs.Warning("[SDcpp] Could not find CUDA bin directory to add to PATH");
-                }
-            }
             try
             {
                 using Process testProcess = Process.Start(psi);
