@@ -10,26 +10,17 @@ using System.Linq;
 namespace Hartsy.Extensions.SDcppExtension.Models;
 
 /// <summary>Converts SwarmUI generation parameters into SD.cpp CLI arguments format. Handles model paths, encoders, VAE, and all generation settings.</summary>
-public class SDcppParameterBuilder
+public class SDcppParameterBuilder(string modelName, string architecture)
 {
-    public readonly string CurrentModelName;
-    public readonly string CurrentModelArchitecture;
-
-    public SDcppParameterBuilder(string modelName, string architecture)
-    {
-        CurrentModelName = modelName;
-        CurrentModelArchitecture = architecture;
-    }
-
     /// <summary>Builds complete SD.cpp parameters dictionary from SwarmUI input.</summary>
     public Dictionary<string, object> BuildParameters(T2IParamInput input, string outputDir)
     {
         Dictionary<string, object> parameters = [];
 
-        bool isFluxModel = CurrentModelArchitecture is "flux";
-        bool isSD3Model = CurrentModelArchitecture is "sd3";
-        bool isZImageModel = CurrentModelArchitecture is "z-image";
-        bool isVideoModel = CurrentModelArchitecture.Contains("wan") || CurrentModelArchitecture is "video";
+        bool isFluxModel = architecture is "flux";
+        bool isSD3Model = architecture is "sd3";
+        bool isZImageModel = architecture    is "z-image";
+        bool isVideoModel = architecture.Contains("wan") || architecture is "video";
 
         // Add performance and processing parameters
         AddPerformanceParameters(parameters, input);
@@ -63,9 +54,9 @@ public class SDcppParameterBuilder
         if (SDcppExtension.MemoryMapParam is not null) parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
         if (SDcppExtension.VAEConvDirectParam is not null) parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
         if (SDcppExtension.VAETilingParam is not null) parameters["vae_tiling"] = input.Get(SDcppExtension.VAETilingParam, true, autoFixDefault: true);
-        bool isFlux = CurrentModelArchitecture is "flux";
-        bool isSD3 = CurrentModelArchitecture is "sd3";
-        bool isDiT = isFlux || isSD3 || CurrentModelArchitecture is "z-image" || CurrentModelArchitecture.Contains("wan");
+        bool isFlux = architecture is "flux";
+        bool isSD3 = architecture is "sd3";
+        bool isDiT = isFlux || isSD3 || architecture is "z-image" || architecture.Contains("wan");
         bool isUNet = !(isDiT);
         int width = input.Get(T2IParamTypes.Width, 512);
         int height = input.Get(T2IParamTypes.Height, 512);
@@ -123,7 +114,7 @@ public class SDcppParameterBuilder
         {
             if (isFluxModel && steps is 0)
             {
-                bool isSchnell = CurrentModelName.ToLowerInvariant().Contains("schnell");
+                bool isSchnell = modelName.Contains("schnell", StringComparison.InvariantCultureIgnoreCase);
                 steps = isSchnell ? 4 : 20;
                 Logs.Info($"[SDcpp] Using default Flux steps: {steps}");
             }
@@ -174,8 +165,8 @@ public class SDcppParameterBuilder
 
     public void AddModelComponents(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel, bool isSD3Model, bool isZImageModel)
     {
-        if (string.IsNullOrEmpty(CurrentModelName)) return;
-        T2IModel mainModel = Program.T2IModelSets["Stable-Diffusion"].Models.Values.FirstOrDefault(m => m.Name == CurrentModelName);
+        if (string.IsNullOrEmpty(modelName)) return;
+        T2IModel mainModel = Program.T2IModelSets["Stable-Diffusion"].Models.Values.FirstOrDefault(m => m.Name == modelName);
         if ((isFluxModel || isSD3Model || isZImageModel) && mainModel is not null)
         {
             parameters["diffusion_model"] = mainModel.RawFilePath;
@@ -477,7 +468,7 @@ public class SDcppParameterBuilder
             parameters["video_frames"] = videoFrames;
             Logs.Debug($"[SDcpp] Video frames: {videoFrames}");
         }
-        if (CurrentModelArchitecture.Contains("wan"))
+        if (architecture.Contains("wan"))
         {
             parameters["flow_shift"] = 3.0;
             Logs.Debug("[SDcpp] Flow shift: 3.0 (Wan model default)");
@@ -487,7 +478,7 @@ public class SDcppParameterBuilder
             parameters["video_fps"] = videoFPS;
             Logs.Debug($"[SDcpp] Video FPS: {videoFPS}");
         }
-        if (CurrentModelArchitecture is "wan-2.2")
+        if (architecture is "wan-2.2")
         {
             if (input.TryGet(T2IParamTypes.VideoSwapModel, out T2IModel swapModel) && swapModel is not null && swapModel.Name is not "(None)")
             {

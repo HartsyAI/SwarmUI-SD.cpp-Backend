@@ -8,13 +8,13 @@ namespace Hartsy.Extensions.SDcppExtension.Utils;
 /// <summary>Handles conversion of models to GGUF format using SD.cpp's conversion tool.</summary>
 public static class GGUFConverter
 {
-    private static readonly HashSet<string> SupportedQuantizations = new() { "f32", "f16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "q3_k", "q2_k" };
+    private static readonly HashSet<string> SupportedQuantizations = ["f32", "f16", "q8_0", "q5_0", "q5_1", "q4_0", "q4_1", "q3_k", "q2_k"];
 
     /// <summary>Checks if a model file is already in GGUF format.</summary>
     public static bool IsGGUFFormat(string modelPath)
     {
         if (string.IsNullOrEmpty(modelPath) || !File.Exists(modelPath)) return false;
-        return Path.GetExtension(modelPath).ToLowerInvariant() == ".gguf";
+        return Path.GetExtension(modelPath).Equals(".gguf", StringComparison.InvariantCultureIgnoreCase);
     }
 
     /// <summary>Generates the output path for a converted GGUF model.</summary>
@@ -93,7 +93,7 @@ public static class GGUFConverter
                     outputBuilder.AppendLine(e.Data);
                     Logs.Info($"[SDcpp Convert] {e.Data}");
                     if (e.Data.Contains("100%")) progressCallback?.Invoke(1.0f);
-                    else if (e.Data.Contains("%"))
+                    else if (e.Data.Contains('%'))
                     {
                         System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(e.Data, @"(\d+)%");
                         if (match.Success && float.TryParse(match.Groups[1].Value, out float progress))

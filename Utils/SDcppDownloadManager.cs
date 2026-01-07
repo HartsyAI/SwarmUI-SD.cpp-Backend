@@ -128,7 +128,7 @@ public static class SDcppDownloadManager
                 {
                     Logs.Debug("[SDcpp] Auto-update disabled, skipping update check");
                 }
-                return EnsureLinuxLauncher(targetDir, expectedExecutable);
+                return EnsureLinuxLauncher(deviceDir, expectedExecutable);
             }
             if (Directory.Exists(deviceDir))
             {
@@ -136,7 +136,7 @@ public static class SDcppDownloadManager
                 if (!string.IsNullOrEmpty(existing) && File.Exists(existing))
                 {
                     Logs.Info($"[SDcpp] Found existing SD.cpp executable (non-standard name): {existing}");
-                    return EnsureLinuxLauncher(targetDir, existing);
+                    return EnsureLinuxLauncher(deviceDir, existing);
                 }
             }
             if (!string.IsNullOrEmpty(currentExecutablePath) && File.Exists(currentExecutablePath))
@@ -148,7 +148,7 @@ public static class SDcppDownloadManager
                 if (isDeviceMatch)
                 {
                     Logs.Info($"[SDcpp] Using user-specified executable: {currentExecutablePath}");
-                    return EnsureLinuxLauncher(targetDir, currentExecutablePath);
+                    return EnsureLinuxLauncher(deviceDir, currentExecutablePath);
                 }
                 else
                 {
@@ -268,13 +268,12 @@ public static class SDcppDownloadManager
     private static JToken FindLinuxAsset(JArray assets, string deviceType, string cudaVersion)
     {
         string normalizedDevice = (deviceType ?? "cpu").ToLowerInvariant();
-        List<JToken> linuxAssets = assets
+        List<JToken> linuxAssets = [.. assets
             .Where(asset =>
             {
                 string name = asset["name"]?.ToString();
                 return !string.IsNullOrEmpty(name) && name.Contains("linux", StringComparison.OrdinalIgnoreCase);
-            })
-            .ToList();
+            })];
         if (!linuxAssets.Any())
         {
             return null;
@@ -479,6 +478,22 @@ public static class SDcppDownloadManager
         {
         }
         return launcherPath;
+    }
+
+    private static string EnsureLinuxLauncher(string targetDir, string executablePath)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return executablePath;
+        }
+
+        string launcherPath = Path.Combine(targetDir, "run-sd-server.sh");
+        if (File.Exists(launcherPath))
+        {
+            return launcherPath;
+        }
+
+        return CreateLinuxLauncher(targetDir, executablePath);
     }
 
     public static string FindBestExecutableInDirectory(string directory)
@@ -711,7 +726,7 @@ public static class SDcppDownloadManager
         int dashIndex = tag.LastIndexOf('-');
         if (dashIndex > 0 && dashIndex < tag.Length - 1)
         {
-            return tag.Substring(dashIndex + 1);
+            return tag[(dashIndex + 1)..];
         }
         return null;
     }
@@ -719,13 +734,12 @@ public static class SDcppDownloadManager
     /// <summary>Cleans version string for parsing (removes 'v' prefix, extracts numeric parts)</summary>
     public static string CleanVersionString(string version)
     {
-        if (string.IsNullOrEmpty(version))
-            return "0.0.0";
+        if (string.IsNullOrEmpty(version)) return "0.0.0";
         version = version.TrimStart('v', 'V');
         int dashIndex = version.IndexOf('-');
         if (dashIndex > 0)
         {
-            version = version.Substring(0, dashIndex);
+            version = version[..dashIndex];
         }
         return version;
     }

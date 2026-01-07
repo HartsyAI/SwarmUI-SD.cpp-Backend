@@ -36,8 +36,8 @@ public static class SDcppModelManager
         string filename = Path.GetFileNameWithoutExtension(model.RawFilePath).ToLowerInvariant();
         string modelName = model.Name.ToLowerInvariant();
         string modelClass = model.ModelClass?.ID.ToLowerInvariant() ?? "";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("flux") ?? false) || filename.Contains("flux") || modelName.Contains("flux")) return "flux";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("sd3") ?? false) || filename.Contains("sd3") || filename.Contains("sd3.5") || modelName.Contains("sd3")) return "sd3";
+        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("flux", StringComparison.InvariantCultureIgnoreCase) ?? false) || filename.Contains("flux") || modelName.Contains("flux")) return "flux";
+        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("sd3", StringComparison.InvariantCultureIgnoreCase) ?? false) || filename.Contains("sd3") || filename.Contains("sd3.5") || modelName.Contains("sd3")) return "sd3";
         if (filename.Contains("z_image") || filename.Contains("z-image") || modelName.Contains("z_image") || modelName.Contains("z-image") || modelClass.Contains("z-image")) return "z-image";
         if (filename.Contains("wan") || modelName.Contains("wan") || modelClass.Contains("wan"))
         {

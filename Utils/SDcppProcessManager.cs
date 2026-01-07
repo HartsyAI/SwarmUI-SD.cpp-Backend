@@ -227,7 +227,7 @@ public class SDcppProcessManager : IDisposable
                         return path;
                     }
                 }
-                string binFromVersioned = FindCudaBinFromVersionedDirs(new[] { "/usr/local", "/opt" });
+                string binFromVersioned = FindCudaBinFromVersionedDirs(["/usr/local", "/opt"]);
                 if (!string.IsNullOrEmpty(binFromVersioned))
                 {
                     Logs.Debug($"[SDcpp] Found CUDA bin directory from versioned install: {binFromVersioned}");
@@ -335,7 +335,7 @@ public class SDcppProcessManager : IDisposable
     public bool ValidateRuntime(out string errorMessage)
     {
         errorMessage = null;
-        bool isCuda = Settings.Device.ToLowerInvariant() == "cuda";
+        bool isCuda = Settings.Device.Equals("cuda", StringComparison.InvariantCultureIgnoreCase);
         const string CudaDownloadUrl = "https://developer.nvidia.com/cuda-12-6-0-download-archive";
         try
         {
@@ -570,8 +570,7 @@ public class SDcppProcessManager : IDisposable
     {
         List<string> args = [];
         if (Settings.Threads > 0) args.Add($"--threads {Settings.Threads}");
-        object enablePreview;
-        if (parameters.TryGetValue("enable_preview", out enablePreview) && enablePreview is bool previewEnabled && previewEnabled)
+        if (parameters.TryGetValue("enable_preview", out object enablePreview) && enablePreview is bool previewEnabled && previewEnabled)
         {
             args.Add("--preview tae");
             args.Add("--preview-interval 1");
@@ -659,7 +658,7 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("taesd", out object taesd) && !string.IsNullOrEmpty(taesd.ToString())) args.Add($"--taesd \"{taesd}\"");
         if (parameters.TryGetValue("upscale_model", out object upscaleModel) && !string.IsNullOrEmpty(upscaleModel.ToString())) args.Add($"--upscale-model \"{upscaleModel}\"");
         if (parameters.TryGetValue("upscale_repeats", out object upscaleRepeats)) args.Add($"--upscale-repeats {upscaleRepeats}");
-        if (parameters.TryGetValue("color", out object color) && color.ToString().ToLowerInvariant() == "true") args.Add("--color");
+        if (parameters.TryGetValue("color", out object color) && color.ToString().Equals("true", StringComparison.InvariantCultureIgnoreCase)) args.Add("--color");
         if (parameters.TryGetValue("video_frames", out object videoFrames))
         {
             args.Add("-M vid_gen");
@@ -716,7 +715,7 @@ public class SDcppProcessManager : IDisposable
                     Logs.Debug($"[SDcpp] Added library dirs to LD_LIBRARY_PATH: {combined}");
                 }
             }
-            if (Settings.Device.ToLowerInvariant() == "cpu")
+            if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
             {
                 processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
                 processInfo.EnvironmentVariables["GGML_USE_CUDA"] = "0";
@@ -828,7 +827,7 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            if (Settings.Device.ToLowerInvariant() == "cpu")
+            if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
             {
                 processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
                 processInfo.EnvironmentVariables["GGML_USE_CUDA"] = "0";
@@ -836,7 +835,7 @@ public class SDcppProcessManager : IDisposable
                 processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = "0";
                 processInfo.EnvironmentVariables["GGML_USE_SYCL"] = "0";
             }
-            else if (Settings.Device.ToLowerInvariant() == "cuda")
+            else if (Settings.Device.Equals("cuda", StringComparison.InvariantCultureIgnoreCase))
             {
                 string cudaBinPath = FindCudaBinDirectory();
                 if (!string.IsNullOrEmpty(cudaBinPath))

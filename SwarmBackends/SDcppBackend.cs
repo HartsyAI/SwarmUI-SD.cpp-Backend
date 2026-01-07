@@ -228,27 +228,24 @@ public class SDcppBackend : AbstractT2IBackend
 
             if (Program.T2IModelSets.TryGetValue("Stable-Diffusion", out T2IModelHandler sdModelSet))
             {
-                Models["Stable-Diffusion"] = sdModelSet.Models.Values
+                Models["Stable-Diffusion"] = [.. sdModelSet.Models.Values
                     .Where(m => m is not null && SDcppModelManager.IsSupportedModel(m))
-                    .Select(m => m.Name)
-                    .ToList();
+                    .Select(m => m.Name)];
                 Logs.Debug($"[SDcpp] Found {Models["Stable-Diffusion"].Count} compatible models");
             }
 
             if (Program.T2IModelSets.TryGetValue("Lora", out T2IModelHandler loraModelSet))
             {
-                Models["LoRA"] = loraModelSet.Models.Values
+                Models["LoRA"] = [.. loraModelSet.Models.Values
                     .Where(m => m is not null)
-                    .Select(m => m.Name)
-                    .ToList();
+                    .Select(m => m.Name)];
             }
 
             if (Program.T2IModelSets.TryGetValue("VAE", out T2IModelHandler vaeModelSet))
             {
-                Models["VAE"] = vaeModelSet.Models.Values
+                Models["VAE"] = [.. vaeModelSet.Models.Values
                     .Where(m => m is not null && SDcppModelManager.IsSupportedVAE(m))
-                    .Select(m => m.Name)
-                    .ToList();
+                    .Select(m => m.Name)];
             }
         }
         catch (Exception ex)
@@ -321,7 +318,7 @@ public class SDcppBackend : AbstractT2IBackend
 
             try
             {
-                SDcppParameterBuilder paramBuilder = new SDcppParameterBuilder(CurrentModelName, CurrentModelArchitecture);
+                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture);
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(user_input, tempDir);
                 // Enable TAESD preview support
                 string previewPath = Path.Combine(tempDir, "preview.png");
@@ -381,30 +378,24 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
-            if (ProcessManager is null)
-                throw new InvalidOperationException("Process manager not initialized");
-
+            if (ProcessManager is null) throw new InvalidOperationException("Process manager not initialized");
             bool isFluxModel = CurrentModelArchitecture is "flux";
             if (isFluxModel)
             {
                 ValidateFluxParameters(input);
             }
-
             string tempDir = Path.Combine(Path.GetTempPath(), "sdcpp_output", Guid.NewGuid().ToString());
             Directory.CreateDirectory(tempDir);
-
             try
             {
-                SDcppParameterBuilder paramBuilder = new SDcppParameterBuilder(CurrentModelName, CurrentModelArchitecture);
+                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture);
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(input, tempDir);
                 (bool success, string output, string error) = await ProcessManager.ExecuteAsync(parameters, isFluxModel);
-
                 if (!success)
                 {
                     Logs.Error($"[SDcpp] Generation failed: {error}");
                     throw new Exception($"SD.cpp generation failed: {error}");
                 }
-
                 Image[] images = await CollectGeneratedImages(tempDir, input);
                 Logs.Info($"[SDcpp] Generated {images.Length} images successfully");
                 return images;
@@ -526,7 +517,7 @@ public class SDcppBackend : AbstractT2IBackend
 
             if (input.TryGet(T2IParamTypes.Steps, out int steps))
             {
-                bool isSchnell = CurrentModelName.ToLowerInvariant().Contains("schnell");
+                bool isSchnell = CurrentModelName.Contains("schnell", StringComparison.InvariantCultureIgnoreCase);
                 int minSteps = isSchnell ? 4 : 20;
                 if (steps < minSteps)
                 {
