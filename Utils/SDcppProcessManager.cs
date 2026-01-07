@@ -1,5 +1,6 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -20,9 +21,7 @@ public class SDcppProcessManager : IDisposable
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
         Settings = settings;
-        WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory)
-            ? Path.GetTempPath()
-            : settings.WorkingDirectory;
+        WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory) ? Path.GetTempPath() : settings.WorkingDirectory;
         Directory.CreateDirectory(WorkingDirectory);
     }
 
@@ -36,7 +35,7 @@ public class SDcppProcessManager : IDisposable
         sb.AppendLine($".NET Runtime: {RuntimeInformation.FrameworkDescription}");
         sb.AppendLine("\n--- NVIDIA GPU(s) Detected ---");
         NvidiaUtil.NvidiaInfo[] nvidiaInfo = NvidiaUtil.QueryNvidia();
-        if (nvidiaInfo != null && nvidiaInfo.Length > 0)
+        if (nvidiaInfo is not null && nvidiaInfo.Length > 0)
         {
             foreach (NvidiaUtil.NvidiaInfo gpu in nvidiaInfo)
             {
@@ -154,11 +153,8 @@ public class SDcppProcessManager : IDisposable
                 string cudaRoot = Path.Combine(programFiles, "NVIDIA GPU Computing Toolkit", "CUDA");
                 if (Directory.Exists(cudaRoot))
                 {
-                    List<VersionDir> versionDirs = Directory.GetDirectories(cudaRoot)
-                        .Select(d => new VersionDir { Path = d, Version = ExtractCudaVersionFromPath(d) })
-                        .Where(x => !string.IsNullOrEmpty(x.Version))
-                        .OrderByDescending(x => x.Version)
-                        .ToList();
+                    List<VersionDir> versionDirs = [.. Directory.GetDirectories(cudaRoot).Select(d => new VersionDir { Path = d, Version = ExtractCudaVersionFromPath(d) })
+                        .Where(x => !string.IsNullOrEmpty(x.Version)).OrderByDescending(x => x.Version)];
                     if (versionDirs.Count > 0)
                     {
                         return (versionDirs[0].Version, versionDirs[0].Path);
@@ -203,9 +199,7 @@ public class SDcppProcessManager : IDisposable
                 string cudaRoot = Path.Combine(programFiles, "NVIDIA GPU Computing Toolkit", "CUDA");
                 if (Directory.Exists(cudaRoot))
                 {
-                    List<string> versionDirs = Directory.GetDirectories(cudaRoot)
-                        .OrderByDescending(d => d)
-                        .ToList();
+                    List<string> versionDirs = [.. Directory.GetDirectories(cudaRoot).OrderByDescending(d => d)];
                     foreach (string versionDir in versionDirs)
                     {
                         string binPath = Path.Combine(versionDir, "bin");
@@ -219,18 +213,24 @@ public class SDcppProcessManager : IDisposable
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
-                string[] linuxPaths =
+                string[] defaultLinuxBins =
                 [
                     "/usr/local/cuda/bin",
                     "/opt/cuda/bin"
                 ];
-                foreach (string path in linuxPaths)
+                foreach (string path in defaultLinuxBins)
                 {
                     if (Directory.Exists(path))
                     {
                         Logs.Debug($"[SDcpp] Found CUDA bin directory: {path}");
                         return path;
                     }
+                }
+                string binFromVersioned = FindCudaBinFromVersionedDirs(new[] { "/usr/local", "/opt" });
+                if (!string.IsNullOrEmpty(binFromVersioned))
+                {
+                    Logs.Debug($"[SDcpp] Found CUDA bin directory from versioned install: {binFromVersioned}");
+                    return binFromVersioned;
                 }
             }
             return null;
@@ -240,6 +240,50 @@ public class SDcppProcessManager : IDisposable
             Logs.Warning($"[SDcpp] Error while searching for CUDA installation: {ex.Message}");
             return null;
         }
+    }
+
+    private static string FindCudaBinFromVersionedDirs(string[] roots)
+    {
+        List<VersionDir> versionDirs = [];
+        foreach (string root in roots.Where(r => Directory.Exists(r)))
+        {
+            foreach (string dir in Directory.GetDirectories(root))
+            {
+                string version = ExtractCudaVersionFromPath(dir);
+                if (!string.IsNullOrEmpty(version))
+                {
+                    versionDirs.Add(new VersionDir { Path = dir, Version = version });
+                }
+                else if (Path.GetFileName(dir).StartsWith("cuda", StringComparison.OrdinalIgnoreCase))
+                {
+                    string binPath = Path.Combine(dir, "bin");
+                    if (Directory.Exists(binPath))
+                    {
+                        return binPath;
+                    }
+                }
+            }
+        }
+
+        VersionDir best = versionDirs.OrderByDescending(v => ParseVersion(v.Version)).FirstOrDefault();
+        if (best is not null)
+        {
+            string binPath = Path.Combine(best.Path, "bin");
+            if (Directory.Exists(binPath))
+            {
+                return binPath;
+            }
+        }
+        return null;
+    }
+
+    public static double ParseVersion(string version)
+    {
+        if (double.TryParse(version, NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+        {
+            return value;
+        }
+        return 0;
     }
 
     /// <summary>Validates that the SD.cpp executable exists at the configured path and is accessible. Called during backend initialization to ensure the backend can function properly.</summary>
@@ -280,7 +324,12 @@ public class SDcppProcessManager : IDisposable
                 errorMessage = "SD.cpp executable is missing or not configured.";
                 return false;
             }
-            if (isCuda)
+            bool shouldCheckCuda = isCuda && string.Equals(Settings.CudaVersion ?? "auto", "auto", StringComparison.OrdinalIgnoreCase);
+            if (isCuda && !shouldCheckCuda)
+            {
+                Logs.Info("[SDcpp] CUDA version manually selected, skipping toolkit auto-detection.");
+            }
+            if (shouldCheckCuda)
             {
                 (string cudaVersion, string cudaPath) = DetectInstalledCudaVersion();
                 Logs.Info($"[SDcpp] Validating CUDA runtime for SD.cpp...");
@@ -293,6 +342,7 @@ public class SDcppProcessManager : IDisposable
                 }
                 else if (!cudaVersion.StartsWith(REQUIRED_CUDA_VERSION))
                 {
+                    Logs.Warning($"[SDcpp] CUDA version mismatch: installed {cudaVersion}, required {REQUIRED_CUDA_VERSION}.x or higher");
                     if (int.TryParse(cudaVersion.Split('.')[0], out int majorVersion) && majorVersion >= 13)
                     {
                         Logs.Info($"[SDcpp] CUDA {cudaVersion} detected. Backward compatible with CUDA {REQUIRED_CUDA_VERSION}.x binaries.");
@@ -330,7 +380,7 @@ public class SDcppProcessManager : IDisposable
             try
             {
                 using Process testProcess = Process.Start(psi);
-                if (testProcess == null)
+                if (testProcess is null)
                 {
                     errorMessage = "Failed to start SD.cpp test process.";
                     return false;
@@ -375,7 +425,7 @@ public class SDcppProcessManager : IDisposable
                 }
                 int code = testProcess.ExitCode;
                 string stderrText = stderr.ToString().Trim();
-                if (code != 0)
+                if (code is not 0)
                 {
                     Logs.Error($"[SDcpp] Runtime validation failed with exit code {code} (0x{code:X8})");
                     if (!string.IsNullOrEmpty(stderrText))
@@ -497,15 +547,13 @@ public class SDcppProcessManager : IDisposable
     public string BuildCommandLine(Dictionary<string, object> parameters, bool isFluxModel = false)
     {
         List<string> args = [];
-        if (Settings.Threads > 0)
-            args.Add($"--threads {Settings.Threads}");
+        if (Settings.Threads > 0) args.Add($"--threads {Settings.Threads}");
         object enablePreview;
         if (parameters.TryGetValue("enable_preview", out enablePreview) && enablePreview is bool previewEnabled && previewEnabled)
         {
             args.Add("--preview tae");
             args.Add("--preview-interval 1");
-            object previewPath;
-            if (parameters.TryGetValue("preview_path", out previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
+            if (parameters.TryGetValue("preview_path", out object previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
             {
                 args.Add($"--preview-path \"{previewPath}\"");
             }
@@ -514,7 +562,9 @@ public class SDcppProcessManager : IDisposable
         bool vaeOnCpu = parameters.TryGetValue("vae_on_cpu", out object vaeOnCpuRaw) && vaeOnCpuRaw is bool vaeOnCpuVal && vaeOnCpuVal;
         bool clipOnCpu = parameters.TryGetValue("clip_on_cpu", out object clipOnCpuRaw) && clipOnCpuRaw is bool clipOnCpuVal && clipOnCpuVal;
         bool flashAttention = parameters.TryGetValue("flash_attention", out object flashAttnRaw) && flashAttnRaw is bool flashAttnVal && flashAttnVal;
-        if (Settings.Device.ToLowerInvariant() == "cpu")
+        bool diffusionConvDirect = parameters.TryGetValue("diffusion_conv_direct", out object diffConvRaw) && diffConvRaw is bool diffConvVal && diffConvVal;
+        bool offloadToCpu = parameters.TryGetValue("offload_to_cpu", out object offloadRaw) && offloadRaw is bool offloadVal && offloadVal;
+        if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
         {
             args.Add("--vae-on-cpu");
             args.Add("--clip-on-cpu");
@@ -523,8 +573,7 @@ public class SDcppProcessManager : IDisposable
         bool isMultiComponent = parameters.ContainsKey("diffusion_model");
         if (isMultiComponent && isFluxModel)
         {
-            bool isGgufModel = parameters.TryGetValue("diffusion_model", out object dm) && 
-                               dm?.ToString()?.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) == true;
+            bool isGgufModel = parameters.TryGetValue("diffusion_model", out object dm) && dm?.ToString()?.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) is true;
             if (!isGgufModel)
             {
                 args.Add("--type f16");
@@ -532,150 +581,74 @@ public class SDcppProcessManager : IDisposable
         }
         if (parameters.ContainsKey("diffusion_model"))
         {
-            object diffusionModel;
-            if (parameters.TryGetValue("diffusion_model", out diffusionModel) && !string.IsNullOrEmpty(diffusionModel.ToString()))
-                args.Add($"--diffusion-model \"{diffusionModel}\"");
-            object clipG;
-            if (parameters.TryGetValue("clip_g", out clipG) && !string.IsNullOrEmpty(clipG.ToString()))
-                args.Add($"--clip_g \"{clipG}\"");
-            object clipL;
-            if (parameters.TryGetValue("clip_l", out clipL) && !string.IsNullOrEmpty(clipL.ToString()))
-                args.Add($"--clip_l \"{clipL}\"");
-            object t5xxl;
-            if (parameters.TryGetValue("t5xxl", out t5xxl) && !string.IsNullOrEmpty(t5xxl.ToString()))
-                args.Add($"--t5xxl \"{t5xxl}\"");
-            object multiVae;
-            if (parameters.TryGetValue("vae", out multiVae) && !string.IsNullOrEmpty(multiVae.ToString()))
-                args.Add($"--vae \"{multiVae}\"");
+            if (parameters.TryGetValue("diffusion_model", out object diffusionModel) && !string.IsNullOrEmpty(diffusionModel.ToString())) args.Add($"--diffusion-model \"{diffusionModel}\"");
+            if (parameters.TryGetValue("clip_g", out object clipG) && !string.IsNullOrEmpty(clipG.ToString())) args.Add($"--clip_g \"{clipG}\"");
+            if (parameters.TryGetValue("clip_l", out object clipL) && !string.IsNullOrEmpty(clipL.ToString())) args.Add($"--clip_l \"{clipL}\"");
+            if (parameters.TryGetValue("t5xxl", out object t5xxl) && !string.IsNullOrEmpty(t5xxl.ToString())) args.Add($"--t5xxl \"{t5xxl}\"");
+            if (parameters.TryGetValue("vae", out object multiVae) && !string.IsNullOrEmpty(multiVae.ToString())) args.Add($"--vae \"{multiVae}\"");
         }
         else
         {
-            object model;
-            if (parameters.TryGetValue("model", out model) && !string.IsNullOrEmpty(model.ToString()))
-                args.Add($"--model \"{model}\"");
-            object vae;
-            if (parameters.TryGetValue("vae", out vae) && !string.IsNullOrEmpty(vae.ToString()))
-                args.Add($"--vae \"{vae}\"");
+            if (parameters.TryGetValue("model", out object model) && !string.IsNullOrEmpty(model.ToString())) args.Add($"--model \"{model}\"");
+            if (parameters.TryGetValue("vae", out object vae) && !string.IsNullOrEmpty(vae.ToString())) args.Add($"--vae \"{vae}\"");
         }
-        object prompt;
-        if (parameters.TryGetValue("prompt", out prompt))
-            args.Add($"--prompt \"{prompt}\"");
-        object negPrompt;
-        if (parameters.TryGetValue("negative_prompt", out negPrompt) && !string.IsNullOrEmpty(negPrompt.ToString()))
-            args.Add($"--negative-prompt \"{negPrompt}\"");
-        object width;
-        if (parameters.TryGetValue("width", out width))
-            args.Add($"--width {width}");
-        object height;
-        if (parameters.TryGetValue("height", out height))
-            args.Add($"--height {height}");
-        object steps;
-        if (parameters.TryGetValue("steps", out steps))
-            args.Add($"--steps {steps}");
-        object cfgScale;
-        if (parameters.TryGetValue("cfg_scale", out cfgScale))
-            args.Add($"--cfg-scale {cfgScale}");
-        object seed;
-        if (parameters.TryGetValue("seed", out seed))
-            args.Add($"--seed {seed}");
-        object sampler;
-        if (parameters.TryGetValue("sampling_method", out sampler))
-            args.Add($"--sampling-method {sampler}");
-        object scheduler;
-        if (parameters.TryGetValue("scheduler", out scheduler))
-            args.Add($"--scheduler {scheduler}");
-        object clipSkip;
-        if (parameters.TryGetValue("clip_skip", out clipSkip))
-            args.Add($"--clip-skip {clipSkip}");
-        object batchCount;
-        if (parameters.TryGetValue("batch_count", out batchCount))
-            args.Add($"--batch-count {batchCount}");
-        object output;
-        if (parameters.TryGetValue("output", out output))
-            args.Add($"--output \"{output}\"");
-        if (Settings.Device.ToLowerInvariant() != "cpu")
+        if (parameters.TryGetValue("prompt", out object prompt)) args.Add($"--prompt \"{prompt}\"");
+        if (parameters.TryGetValue("negative_prompt", out object negPrompt) && !string.IsNullOrEmpty(negPrompt.ToString())) args.Add($"--negative-prompt \"{negPrompt}\"");
+        if (parameters.TryGetValue("width", out object width)) args.Add($"--width {width}");
+        if (parameters.TryGetValue("height", out object height)) args.Add($"--height {height}");
+        if (parameters.TryGetValue("steps", out object steps)) args.Add($"--steps {steps}");
+        if (parameters.TryGetValue("cfg_scale", out object cfgScale)) args.Add($"--cfg-scale {cfgScale}");
+        if (parameters.TryGetValue("seed", out object seed)) args.Add($"--seed {seed}");
+        if (parameters.TryGetValue("sampling_method", out object sampler)) args.Add($"--sampling-method {sampler}");
+        if (parameters.TryGetValue("scheduler", out object scheduler)) args.Add($"--scheduler {scheduler}");
+        if (parameters.TryGetValue("clip_skip", out object clipSkip)) args.Add($"--clip-skip {clipSkip}");
+        if (parameters.TryGetValue("batch_count", out object batchCount)) args.Add($"--batch-count {batchCount}");
+        if (parameters.TryGetValue("output", out object output)) args.Add($"--output \"{output}\"");
+        if (!Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
         {
-            if (vaeTiling)
-                args.Add("--vae-tiling");
-            if (vaeOnCpu)
-                args.Add("--vae-on-cpu");
-            if (clipOnCpu)
-                args.Add("--clip-on-cpu");
+            if (vaeTiling) args.Add("--vae-tiling");
+            if (vaeOnCpu) args.Add("--vae-on-cpu");
+            if (clipOnCpu) args.Add("--clip-on-cpu");
         }
-        if (flashAttention)
-            args.Add("--diffusion-fa");
-        object mmap;
-        if (parameters.TryGetValue("mmap", out mmap) && mmap is bool mmapVal && mmapVal)
-            args.Add("--mmap");
-        object vaeConvDirect;
-        if (parameters.TryGetValue("vae_conv_direct", out vaeConvDirect) && vaeConvDirect is bool vaeConvVal && vaeConvVal)
-            args.Add("--vae-conv-direct");
-        object cacheMode;
-        if (parameters.TryGetValue("cache_mode", out cacheMode) && !string.IsNullOrEmpty(cacheMode.ToString()))
+        if (flashAttention) args.Add("--diffusion-fa");
+        if (diffusionConvDirect) args.Add("--diffusion-conv-direct");
+        if (offloadToCpu) args.Add("--offload-to-cpu");
+        if (parameters.TryGetValue("mmap", out object mmap) && mmap is bool mmapVal && mmapVal) args.Add("--mmap");
+        if (parameters.TryGetValue("vae_conv_direct", out object vaeConvDirect) && vaeConvDirect is bool vaeConvVal && vaeConvVal) args.Add("--vae-conv-direct");
+        if (parameters.TryGetValue("cache_mode", out object cacheMode) && !string.IsNullOrEmpty(cacheMode.ToString()))
         {
             args.Add($"--cache-mode {cacheMode}");
-            object cachePreset;
-            if (parameters.TryGetValue("cache_preset", out cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
+            if (parameters.TryGetValue("cache_option", out object cacheOption) && !string.IsNullOrEmpty(cacheOption.ToString()))
+            {
+                args.Add($"--cache-option \"{cacheOption}\"");
+            }
+            if (parameters.TryGetValue("cache_preset", out object cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
             {
                 args.Add($"--cache-preset {cachePreset}");
             }
         }
-        object initImg;
-        if (parameters.TryGetValue("init_img", out initImg) && !string.IsNullOrEmpty(initImg.ToString()))
-            args.Add($"--init-img \"{initImg}\"");
-        object strength;
-        if (parameters.TryGetValue("strength", out strength))
-            args.Add($"--strength {strength}");
-        object mask;
-        if (parameters.TryGetValue("mask", out mask) && !string.IsNullOrEmpty(mask.ToString()))
-            args.Add($"--mask \"{mask}\"");
-        object controlNet;
-        if (parameters.TryGetValue("control_net", out controlNet) && !string.IsNullOrEmpty(controlNet.ToString()))
-            args.Add($"--control-net \"{controlNet}\"");
-        object controlImage;
-        if (parameters.TryGetValue("control_image", out controlImage) && !string.IsNullOrEmpty(controlImage.ToString()))
-            args.Add($"--control-image \"{controlImage}\"");
-        object controlStrength;
-        if (parameters.TryGetValue("control_strength", out controlStrength))
-            args.Add($"--control-strength {controlStrength}");
-        object guidance;
-        if (parameters.TryGetValue("guidance", out guidance))
-            args.Add($"--guidance {guidance}");
-        object taesd;
-        if (parameters.TryGetValue("taesd", out taesd) && !string.IsNullOrEmpty(taesd.ToString()))
-            args.Add($"--taesd \"{taesd}\"");
-        object upscaleModel;
-        if (parameters.TryGetValue("upscale_model", out upscaleModel) && !string.IsNullOrEmpty(upscaleModel.ToString()))
-            args.Add($"--upscale-model \"{upscaleModel}\"");
-        object upscaleRepeats;
-        if (parameters.TryGetValue("upscale_repeats", out upscaleRepeats))
-            args.Add($"--upscale-repeats {upscaleRepeats}");
-        object color;
-        if (parameters.TryGetValue("color", out color) && color.ToString().ToLowerInvariant() == "true")
-            args.Add("--color");
-        object videoFrames;
-        if (parameters.TryGetValue("video_frames", out videoFrames))
+        if (parameters.TryGetValue("init_img", out object initImg) && !string.IsNullOrEmpty(initImg.ToString())) args.Add($"--init-img \"{initImg}\"");
+        if (parameters.TryGetValue("strength", out object strength)) args.Add($"--strength {strength}");
+        if (parameters.TryGetValue("mask", out object mask) && !string.IsNullOrEmpty(mask.ToString())) args.Add($"--mask \"{mask}\"");
+        if (parameters.TryGetValue("control_net", out object controlNet) && !string.IsNullOrEmpty(controlNet.ToString())) args.Add($"--control-net \"{controlNet}\"");
+        if (parameters.TryGetValue("control_image", out object controlImage) && !string.IsNullOrEmpty(controlImage.ToString())) args.Add($"--control-image \"{controlImage}\"");
+        if (parameters.TryGetValue("control_strength", out object controlStrength)) args.Add($"--control-strength {controlStrength}");
+        if (parameters.TryGetValue("guidance", out object guidance)) args.Add($"--guidance {guidance}");
+        if (parameters.TryGetValue("taesd", out object taesd) && !string.IsNullOrEmpty(taesd.ToString())) args.Add($"--taesd \"{taesd}\"");
+        if (parameters.TryGetValue("upscale_model", out object upscaleModel) && !string.IsNullOrEmpty(upscaleModel.ToString())) args.Add($"--upscale-model \"{upscaleModel}\"");
+        if (parameters.TryGetValue("upscale_repeats", out object upscaleRepeats)) args.Add($"--upscale-repeats {upscaleRepeats}");
+        if (parameters.TryGetValue("color", out object color) && color.ToString().ToLowerInvariant() == "true") args.Add("--color");
+        if (parameters.TryGetValue("video_frames", out object videoFrames))
         {
             args.Add("-M vid_gen");
             args.Add($"--video-frames {videoFrames}");
         }
-        object videoFPS;
-        if (parameters.TryGetValue("video_fps", out videoFPS))
-            args.Add($"--video-fps {videoFPS}");
-        object flowShift;
-        if (parameters.TryGetValue("flow_shift", out flowShift))
-            args.Add($"--flow-shift {flowShift}");
-        object highNoiseModel;
-        if (parameters.TryGetValue("high_noise_diffusion_model", out highNoiseModel) && !string.IsNullOrEmpty(highNoiseModel.ToString()))
-            args.Add($"--high-noise-diffusion-model \"{highNoiseModel}\"");
-        object videoSwapPercent;
-        if (parameters.TryGetValue("video_swap_percent", out videoSwapPercent))
-            args.Add($"--video-swap-percent {videoSwapPercent}");
-        object loraDir;
-        if (parameters.TryGetValue("lora_model_dir", out loraDir) && !string.IsNullOrEmpty(loraDir.ToString()))
-            args.Add($"--lora-model-dir \"{loraDir}\"");
-        if (Settings.DebugMode)
-            args.Add("--verbose");
+        if (parameters.TryGetValue("video_fps", out object videoFPS)) args.Add($"--video-fps {videoFPS}");
+        if (parameters.TryGetValue("flow_shift", out object flowShift)) args.Add($"--flow-shift {flowShift}");
+        if (parameters.TryGetValue("high_noise_diffusion_model", out object highNoiseModel) && !string.IsNullOrEmpty(highNoiseModel.ToString())) args.Add($"--high-noise-diffusion-model \"{highNoiseModel}\"");
+        if (parameters.TryGetValue("video_swap_percent", out object videoSwapPercent)) args.Add($"--video-swap-percent {videoSwapPercent}");
+        if (parameters.TryGetValue("lora_model_dir", out object loraDir) && !string.IsNullOrEmpty(loraDir.ToString())) args.Add($"--lora-model-dir \"{loraDir}\"");
+        if (Settings.DebugMode) args.Add("--verbose");
         return string.Join(" ", args);
     }
 
@@ -685,8 +658,7 @@ public class SDcppProcessManager : IDisposable
     /// <returns>Tuple containing success status, stdout output, and stderr output</returns>
     public async Task<(bool Success, string Output, string Error)> ExecuteAsync(Dictionary<string, object> parameters, bool isFluxModel = false)
     {
-        if (!ValidateExecutable())
-            return (false, "", "SD.cpp executable validation failed");
+        if (!ValidateExecutable()) return (false, "", "SD.cpp executable validation failed");
         string commandLine = BuildCommandLine(parameters, isFluxModel);
         try
         {
@@ -712,7 +684,7 @@ public class SDcppProcessManager : IDisposable
                     Logs.Debug("[SDcpp] Forcing CPU-only mode via environment variables");
                 }
             }
-            else if (Settings.Device.ToLowerInvariant() == "cuda")
+            else if (Settings.Device.ToLowerInvariant() is "cuda")
             {
                 string cudaBinPath = FindCudaBinDirectory();
                 if (!string.IsNullOrEmpty(cudaBinPath))
@@ -735,8 +707,7 @@ public class SDcppProcessManager : IDisposable
                 Logs.Debug($"[SDcpp] Working directory: {WorkingDirectory}");
             }
             Process = Process.Start(processInfo);
-            if (Process == null)
-                return (false, "", "Failed to start SD.cpp process");
+            if (Process is null) return (false, "", "Failed to start SD.cpp process");
             StringBuilder outputBuilder = new();
             StringBuilder errorBuilder = new();
             Task outputTask = Task.Run(async () =>
@@ -744,11 +715,10 @@ public class SDcppProcessManager : IDisposable
                 while (!Process.StandardOutput.EndOfStream)
                 {
                     string line = await Process.StandardOutput.ReadLineAsync();
-                    if (line != null)
+                    if (line is not null)
                     {
                         outputBuilder.AppendLine(line);
-                        if (Settings.DebugMode)
-                            Logs.Debug($"[SDcpp] Output: {line}");
+                        if (Settings.DebugMode) Logs.Debug($"[SDcpp] Output: {line}");
                     }
                 }
             });
@@ -757,11 +727,10 @@ public class SDcppProcessManager : IDisposable
                 while (!Process.StandardError.EndOfStream)
                 {
                     string line = await Process.StandardError.ReadLineAsync();
-                    if (line != null)
+                    if (line is not null)
                     {
                         errorBuilder.AppendLine(line);
-                        if (Settings.DebugMode)
-                            Logs.Debug($"[SDcpp] Error: {line}");
+                        if (Settings.DebugMode) Logs.Debug($"[SDcpp] Error: {line}");
                     }
                 }
             });
@@ -778,8 +747,7 @@ public class SDcppProcessManager : IDisposable
             bool success = Process.ExitCode == 0;
             string output = outputBuilder.ToString();
             string error = errorBuilder.ToString();
-            if (Settings.DebugMode)
-                Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
+            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
             return (success, output, error);
         }
         catch (Exception ex)
@@ -799,13 +767,9 @@ public class SDcppProcessManager : IDisposable
     /// <param name="isFluxModel">Whether this is a Flux model</param>
     /// <param name="progressCallback">Callback for progress updates (0.0 to 1.0)</param>
     /// <returns>Tuple containing success status, stdout output, and stderr output</returns>
-    public async Task<(bool Success, string Output, string Error)> ExecuteWithProgressAsync(
-        Dictionary<string, object> parameters,
-        bool isFluxModel,
-        Action<float> progressCallback)
+    public async Task<(bool Success, string Output, string Error)> ExecuteWithProgressAsync(Dictionary<string, object> parameters, bool isFluxModel, Action<float> progressCallback)
     {
-        if (!ValidateExecutable())
-            return (false, "", "SD.cpp executable validation failed");
+        if (!ValidateExecutable()) return (false, "", "SD.cpp executable validation failed");
         string commandLine = BuildCommandLine(parameters, isFluxModel);
         Logs.Info($"[SDcpp] Executing SD.cpp with command: {Settings.ExecutablePath} {commandLine}");
         try
@@ -850,8 +814,7 @@ public class SDcppProcessManager : IDisposable
                 Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
             }
             Process = Process.Start(processInfo);
-            if (Process == null)
-                return (false, "", "Failed to start SD.cpp process");
+            if (Process is null) return (false, "", "Failed to start SD.cpp process");
             StringBuilder outputBuilder = new();
             StringBuilder errorBuilder = new();
             Task outputTask = Task.Run(async () =>
@@ -859,7 +822,7 @@ public class SDcppProcessManager : IDisposable
                 while (!Process.StandardOutput.EndOfStream)
                 {
                     string line = await Process.StandardOutput.ReadLineAsync();
-                    if (line != null)
+                    if (line is not null)
                     {
                         outputBuilder.AppendLine(line);
                         System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(line, @"(\d+)/(\d+)");
@@ -878,7 +841,7 @@ public class SDcppProcessManager : IDisposable
                 while (!Process.StandardError.EndOfStream)
                 {
                     string line = await Process.StandardError.ReadLineAsync();
-                    if (line != null)
+                    if (line is not null)
                     {
                         errorBuilder.AppendLine(line);
                         if (Settings.DebugMode)
@@ -900,8 +863,7 @@ public class SDcppProcessManager : IDisposable
             bool success = Process.ExitCode == 0;
             string output = outputBuilder.ToString();
             string error = errorBuilder.ToString();
-            if (Settings.DebugMode)
-                Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
+            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
             return (success, output, error);
         }
         catch (Exception ex)
@@ -920,7 +882,7 @@ public class SDcppProcessManager : IDisposable
     /// <returns>True if process exists and is running, false if null or has exited</returns>
     public bool IsProcessRunning()
     {
-        return Process != null && !Process.HasExited;
+        return Process is not null && !Process.HasExited;
     }
 
     /// <summary>Forcibly terminates the SD.cpp process if it's currently running. Used for cleanup during shutdown or when a process needs to be cancelled. Waits up to 5 seconds for graceful exit before forcing termination.</summary>
@@ -928,7 +890,7 @@ public class SDcppProcessManager : IDisposable
     {
         try
         {
-            if (Process != null && !Process.HasExited)
+            if (Process is not null && !Process.HasExited)
             {
                 Process.Kill();
                 Process.WaitForExit(5000);

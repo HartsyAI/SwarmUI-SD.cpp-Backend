@@ -19,15 +19,12 @@ public class SDcppExtension : Extension
     public static T2IRegisteredParam<bool> VAETilingParam;
     public static T2IRegisteredParam<bool> VAEOnCPUParam;
     public static T2IRegisteredParam<bool> CLIPOnCPUParam;
-    public static T2IRegisteredParam<bool> FlashAttentionParam;
     public static T2IRegisteredParam<T2IModel> TAESDParam;
     public static T2IRegisteredParam<T2IModel> UpscaleModelParam;
     public static T2IRegisteredParam<int> UpscaleRepeatsParam;
     public static T2IRegisteredParam<bool> ColorProjectionParam;
     public static T2IRegisteredParam<bool> MemoryMapParam;
     public static T2IRegisteredParam<bool> VAEConvDirectParam;
-    public static T2IRegisteredParam<string> CacheModeParam;
-    public static T2IRegisteredParam<string> CachePresetParam;
 
     /// <inheritdoc/>
     public override void OnPreInit()
@@ -109,8 +106,6 @@ public class SDcppExtension : Extension
                 "false", Group: sdcppGroup, FeatureFlag: "sdcpp", OrderPriority: 2));
             CLIPOnCPUParam = T2IParamTypes.Register<bool>(new("CLIP on CPU", "Run CLIP text encoder on CPU instead of GPU. Useful if running out of VRAM.",
                 "false", Group: sdcppGroup, FeatureFlag: "sdcpp", OrderPriority: 3));
-            FlashAttentionParam = T2IParamTypes.Register<bool>(new("Flash Attention", "Enable Flash Attention optimization. May reduce quality slightly but saves memory.",
-                "false", Group: sdcppGroup, FeatureFlag: "sdcpp", OrderPriority: 4));
             SamplerParam = T2IParamTypes.Register<string>(new("SD.cpp Sampler", "Sampling method for SD.cpp backend. Euler is recommended for Flux, euler_a for SD/SDXL.",
                 "euler", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.GroupSampling, OrderPriority: -5,
                 GetValues: (_) => ["euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "ipndm_v", "lcm", "tcd"]));
@@ -130,10 +125,6 @@ public class SDcppExtension : Extension
                 "true", Group: performanceGroup, FeatureFlag: "sdcpp", OrderPriority: 1, Toggleable: true));
             VAEConvDirectParam = T2IParamTypes.Register<bool>(new("VAE Direct Convolution", "Use direct convolution in VAE decoder for faster processing. Significantly improves decoding speed. Requires SD.cpp master-1896b28 or newer.",
                 "true", Group: performanceGroup, FeatureFlag: "sdcpp", OrderPriority: 2, Toggleable: true));
-            CacheModeParam = T2IParamTypes.Register<string>(new("Cache Mode", "Inference caching mode for faster generation. 'auto' detects best mode (cache-dit for Flux/DiT, ucache for SD/SDXL). Can reduce generation time by 5-10x. Requires SD.cpp master-1896b28 or newer.",
-                "auto", Toggleable: true, FeatureFlag: "sdcpp", Group: performanceGroup, OrderPriority: 3, GetValues: (_) => ["none", "auto", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit"]));
-            CachePresetParam = T2IParamTypes.Register<string>(new("Cache Preset", "Cache quality/speed preset. 'fast' or 'ultra' modes can reduce generation time by 5-10x. Only applies when Cache Mode is enabled.",
-                "fast", Toggleable: true, FeatureFlag: "sdcpp", Group: performanceGroup, OrderPriority: 4, GetValues: (_) =>["slow", "medium", "fast", "ultra"]));
             Logs.Verbose("[SDcpp] Parameters registered successfully");
         }
         catch (Exception ex)

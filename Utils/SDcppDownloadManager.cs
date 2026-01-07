@@ -18,6 +18,13 @@ public static class SDcppDownloadManager
         "stable-diffusion.cpp.exe"
     ];
 
+    private static readonly string[] UnixExecutableCandidates = [
+        "sd",
+        "stable-diffusion",
+        "stable-diffusion.cpp",
+        "stable-diffusion-cpp"
+    ];
+
     /// <summary>GitHub API endpoint for latest SD.cpp releases</summary>
     private const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
 
@@ -187,6 +194,17 @@ public static class SDcppDownloadManager
                 Logs.Warning("[SDcpp] No assets found in latest release, using fallback...");
                 return GetFallbackDownloadInfo(deviceType, cudaVersion);
             }
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                JToken linuxAsset = FindLinuxAsset(assets, deviceType, cudaVersion);
+                if (linuxAsset != null)
+                {
+                    return CreateDownloadInfoFromAsset(linuxAsset, tagName);
+                }
+                Logs.Warning("[SDcpp] No matching Linux asset in latest release, using fallback...");
+                return GetFallbackDownloadInfo(deviceType, cudaVersion);
+            }
+
             string assetPattern = GetPlatformAssetPattern(deviceType, cudaVersion);
             if (string.IsNullOrEmpty(assetPattern))
             {
@@ -198,13 +216,7 @@ public static class SDcppDownloadManager
                 string name = asset["name"]?.ToString();
                 if (name != null && name.Contains(assetPattern, StringComparison.OrdinalIgnoreCase))
                 {
-                    return new DownloadInfo
-                    {
-                        FileName = name,
-                        DownloadUrl = asset["browser_download_url"]?.ToString(),
-                        Size = asset["size"]?.ToObject<long>() ?? 0,
-                        TagName = tagName
-                    };
+                    return CreateDownloadInfoFromAsset(asset, tagName);
                 }
             }
             Logs.Warning($"[SDcpp] No matching asset for pattern '{assetPattern}', using fallback...");
@@ -249,6 +261,76 @@ public static class SDcppDownloadManager
             return "Darwin-macOS";
         }
         return null;
+    }
+
+    private static JToken FindLinuxAsset(JArray assets, string deviceType, string cudaVersion)
+    {
+        string normalizedDevice = (deviceType ?? "cpu").ToLowerInvariant();
+        List<JToken> linuxAssets = assets
+            .Where(asset =>
+            {
+                string name = asset["name"]?.ToString();
+                return !string.IsNullOrEmpty(name) && name.Contains("linux", StringComparison.OrdinalIgnoreCase);
+            })
+            .ToList();
+        if (!linuxAssets.Any())
+        {
+            return null;
+        }
+
+        if (normalizedDevice == "cuda")
+        {
+            string target = $"cuda{cudaVersion}";
+            JToken best = linuxAssets.FirstOrDefault(asset =>
+            {
+                string name = asset["name"]?.ToString();
+                return !string.IsNullOrEmpty(name) && name.Contains(target, StringComparison.OrdinalIgnoreCase);
+            });
+            if (best is not null)
+            {
+                return best;
+            }
+            return linuxAssets.FirstOrDefault(asset =>
+            {
+                string name = asset["name"]?.ToString();
+                return !string.IsNullOrEmpty(name) && name.Contains("cuda", StringComparison.OrdinalIgnoreCase);
+            });
+        }
+
+        if (normalizedDevice == "vulkan")
+        {
+            JToken best = linuxAssets.FirstOrDefault(asset =>
+            {
+                string name = asset["name"]?.ToString();
+                return !string.IsNullOrEmpty(name) && name.Contains("vulkan", StringComparison.OrdinalIgnoreCase);
+            });
+            if (best is not null)
+            {
+                return best;
+            }
+        }
+
+        JToken cpuCandidate = linuxAssets.FirstOrDefault(asset =>
+        {
+            string name = asset["name"]?.ToString();
+            if (string.IsNullOrEmpty(name))
+            {
+                return false;
+            }
+            return !name.Contains("vulkan", StringComparison.OrdinalIgnoreCase) && !name.Contains("cuda", StringComparison.OrdinalIgnoreCase);
+        });
+        return cpuCandidate ?? linuxAssets.FirstOrDefault();
+    }
+
+    private static DownloadInfo CreateDownloadInfoFromAsset(JToken asset, string tagName)
+    {
+        return new DownloadInfo
+        {
+            FileName = asset["name"]?.ToString(),
+            DownloadUrl = asset["browser_download_url"]?.ToString(),
+            Size = asset["size"]?.ToObject<long>() ?? 0,
+            TagName = tagName
+        };
     }
 
     /// <summary>Fallback download info when GitHub API is unavailable or rate-limited. Uses known working release URLs.</summary>
@@ -337,7 +419,12 @@ public static class SDcppDownloadManager
             }
             string sourceDir = Path.GetDirectoryName(foundExecutable);
             CopyDirectoryContents(sourceDir, targetDir);
-            string finalExecutable = Path.Combine(targetDir, Path.GetFileName(foundExecutable));
+            string finalExecutable = FindBestExecutableInDirectory(targetDir);
+            if (string.IsNullOrEmpty(finalExecutable))
+            {
+                Logs.Error("[SDcpp] Executable missing after copy to target directory");
+                return null;
+            }
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 try
@@ -397,8 +484,31 @@ public static class SDcppDownloadManager
                 }
                 return null;
             }
-            // Unix-like: should be sd
-            return FindExecutableInDirectory(directory, "sd");
+            foreach (string exe in UnixExecutableCandidates)
+            {
+                string found = FindExecutableInDirectory(directory, exe);
+                if (!string.IsNullOrEmpty(found))
+                {
+                    return found;
+                }
+            }
+
+            foreach (string file in Directory.GetFiles(directory))
+            {
+                string fileName = Path.GetFileName(file);
+                string extension = Path.GetExtension(fileName).ToLowerInvariant();
+                if (string.IsNullOrEmpty(fileName) || fileName.StartsWith("lib") || fileName.Contains(".so"))
+                {
+                    continue;
+                }
+                if (extension is ".json" or ".txt" or ".md")
+                {
+                    continue;
+                }
+                return file;
+            }
+
+            return null;
         }
         catch (Exception ex)
         {

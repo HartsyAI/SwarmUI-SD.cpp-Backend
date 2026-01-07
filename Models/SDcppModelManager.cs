@@ -12,6 +12,7 @@ public static class SDcppModelManager
 {
     /// <summary>Lock object for model downloads to prevent duplicate downloads</summary>
     public static readonly FreneticUtilities.FreneticToolkit.LockObject ModelDownloadLock = new();
+
     /// <summary>Determines if a model is supported by SD.cpp based on file format and architecture.</summary>
     public static bool IsSupportedModel(T2IModel model)
     {
@@ -19,6 +20,7 @@ public static class SDcppModelManager
         string ext = Path.GetExtension(model.RawFilePath).ToLowerInvariant();
         return ext is ".safetensors" or ".gguf" or ".ckpt" or ".bin" or ".sft";
     }
+
     /// <summary>Determines if a VAE model is supported by SD.cpp.</summary>
     public static bool IsSupportedVAE(T2IModel model)
     {
@@ -26,6 +28,7 @@ public static class SDcppModelManager
         string ext = Path.GetExtension(model.RawFilePath).ToLowerInvariant();
         return ext is ".safetensors" or ".sft" or ".ckpt" or ".bin";
     }
+
     /// <summary>Detects the model architecture type (Flux, SD3, SDXL, SD15, etc.) based on filename, model class, and metadata.</summary>
     public static string DetectArchitecture(T2IModel model)
     {
@@ -33,53 +36,34 @@ public static class SDcppModelManager
         string filename = Path.GetFileNameWithoutExtension(model.RawFilePath).ToLowerInvariant();
         string modelName = model.Name.ToLowerInvariant();
         string modelClass = model.ModelClass?.ID.ToLowerInvariant() ?? "";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("flux") ?? false) ||
-            filename.Contains("flux") || modelName.Contains("flux"))
-            return "flux";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("sd3") ?? false) ||
-            filename.Contains("sd3") || filename.Contains("sd3.5") || modelName.Contains("sd3"))
-            return "sd3";
-        if (filename.Contains("z_image") || filename.Contains("z-image") ||
-            modelName.Contains("z_image") || modelName.Contains("z-image") ||
-            modelClass.Contains("z-image"))
-            return "z-image";
+        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("flux") ?? false) || filename.Contains("flux") || modelName.Contains("flux")) return "flux";
+        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("sd3") ?? false) || filename.Contains("sd3") || filename.Contains("sd3.5") || modelName.Contains("sd3")) return "sd3";
+        if (filename.Contains("z_image") || filename.Contains("z-image") || modelName.Contains("z_image") || modelName.Contains("z-image") || modelClass.Contains("z-image")) return "z-image";
         if (filename.Contains("wan") || modelName.Contains("wan") || modelClass.Contains("wan"))
         {
-            if (filename.Contains("2.2") || modelName.Contains("2.2") ||
-                filename.Contains("2_2") || modelName.Contains("2_2"))
-                return "wan-2.2";
-            if (filename.Contains("2.1") || modelName.Contains("2.1") ||
-                filename.Contains("2_1") || modelName.Contains("2_1"))
-                return "wan-2.1";
+            if (filename.Contains("2.2") || modelName.Contains("2.2") || filename.Contains("2_2") || modelName.Contains("2_2")) return "wan-2.2";
+            if (filename.Contains("2.1") || modelName.Contains("2.1") || filename.Contains("2_1") || modelName.Contains("2_1")) return "wan-2.1";
             return "wan";
         }
-        if (modelClass.Contains("-i2v") || modelClass.Contains("image2video") ||
-            modelClass.Contains("-ti2v") || modelClass.Contains("-flf2v") ||
-            modelClass.Contains("video2world") || filename.Contains("i2v") ||
-            filename.Contains("ti2v") || filename.Contains("flf2v"))
-            return "video";
+        if (modelClass.Contains("-i2v") || modelClass.Contains("image2video") || modelClass.Contains("-ti2v") || modelClass.Contains("-flf2v") || modelClass.Contains("video2world") || filename.Contains("i2v") ||
+            filename.Contains("ti2v") || filename.Contains("flf2v")) return "video";
         if (modelClass.Contains("sdxl") || filename.Contains("sdxl"))
         {
-            if (filename.Contains("turbo") || modelName.Contains("turbo"))
-                return "sdxl-turbo";
+            if (filename.Contains("turbo") || modelName.Contains("turbo")) return "sdxl-turbo";
             return "sdxl";
         }
-        if (modelClass.Contains("stable-diffusion-v2") || modelClass.Contains("stable-diffusion-2"))
-            return "sd2";
+        if (modelClass.Contains("stable-diffusion-v2") || modelClass.Contains("stable-diffusion-2")) return "sd2";
         if (modelClass.Contains("stable-diffusion-v1") || modelClass.Contains("stable-diffusion-1"))
         {
-            if (filename.Contains("turbo") || modelName.Contains("turbo"))
-                return "sd15-turbo";
+            if (filename.Contains("turbo") || modelName.Contains("turbo")) return "sd15-turbo";
             return "sd15";
         }
-        if (filename.Contains("lcm") || modelName.Contains("lcm"))
-            return "lcm";
-        if (model.StandardWidth == 1024 && model.StandardHeight == 1024)
-            return "sdxl";
-        if (model.StandardWidth == 512 && model.StandardHeight == 512)
-            return "sd15";
+        if (filename.Contains("lcm") || modelName.Contains("lcm")) return "lcm";
+        if (model.StandardWidth == 1024 && model.StandardHeight == 1024) return "sdxl";
+        if (model.StandardWidth == 512 && model.StandardHeight == 512) return "sd15";
         return "unknown";
     }
+
     /// <summary>Ensures a required model component exists, downloading it if necessary. Uses a thread-safe download lock to prevent duplicate downloads.</summary>
     public static string EnsureModelExists(string modelType, string fileName, string url, string hash = null)
     {
@@ -89,9 +73,7 @@ public static class SDcppModelManager
             return value.RawFilePath;
         }
         string baseName = Path.GetFileName(fileName);
-        T2IModel existing = modelSet.Models.Values.FirstOrDefault(m =>
-            m.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase) ||
-            m.Name.Equals(fileName, StringComparison.OrdinalIgnoreCase));
+        T2IModel existing = modelSet.Models.Values.FirstOrDefault(m => m.Name.Equals(baseName, StringComparison.OrdinalIgnoreCase) || m.Name.Equals(fileName, StringComparison.OrdinalIgnoreCase));
         if (existing is not null)
         {
             return existing.RawFilePath;
@@ -153,6 +135,7 @@ public static class SDcppModelManager
             }
         }
     }
+
     /// <summary>Gets the list of supported features for a given model architecture.</summary>
     public static List<string> GetFeaturesForArchitecture(string architecture)
     {
