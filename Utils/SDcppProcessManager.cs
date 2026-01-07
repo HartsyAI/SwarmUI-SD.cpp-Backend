@@ -2,6 +2,7 @@ using SwarmUI.Utils;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Runtime.InteropServices;
 using static Hartsy.Extensions.SDcppExtension.SwarmBackends.SDcppBackend;
@@ -698,10 +699,21 @@ public class SDcppProcessManager : IDisposable
                 string execDir = Path.GetDirectoryName(Settings.ExecutablePath);
                 if (!string.IsNullOrEmpty(execDir))
                 {
+                    List<string> libDirs = [execDir];
+                    string[] extraLibs = ["lib", "lib64"];
+                    foreach (string libFolder in extraLibs)
+                    {
+                        string candidate = Path.Combine(execDir, libFolder);
+                        if (Directory.Exists(candidate))
+                        {
+                            libDirs.Add(candidate);
+                        }
+                    }
                     string existing = processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] ?? Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "";
-                    string newValue = string.IsNullOrEmpty(existing) ? execDir : $"{execDir}:{existing}";
+                    string combined = string.Join(':', libDirs.Where(dir => !string.IsNullOrEmpty(dir)));
+                    string newValue = string.IsNullOrEmpty(existing) ? combined : $"{combined}:{existing}";
                     processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] = newValue;
-                    Logs.Debug($"[SDcpp] Added executable directory to LD_LIBRARY_PATH: {execDir}");
+                    Logs.Debug($"[SDcpp] Added library dirs to LD_LIBRARY_PATH: {combined}");
                 }
             }
             if (Settings.Device.ToLowerInvariant() == "cpu")
