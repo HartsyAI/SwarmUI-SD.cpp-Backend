@@ -1,7 +1,6 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Runtime.InteropServices;
 using static Hartsy.Extensions.SDcppExtension.SwarmBackends.SDcppBackend;
@@ -165,32 +164,7 @@ public class SDcppProcessManager : IDisposable
                             Logs.Info($"[SDcpp] {line.TrimEnd()}");
                         }
                     }
-                    if (code == -1073741515)
-                    {
-                        if (isCuda)
-                        {
-                            (string installedVersion, string _) = DetectInstalledCudaVersion();
-                            errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
-                        }
-                        else
-                        {
-                            errorMessage = $"SD.cpp binary failed to start (missing DLL error - 0xC0000135).\n\n" +
-                                $"This usually means you need to install:\n" +
-                                $"Microsoft Visual C++ Redistributable (2015-2022)\n" +
-                                $"Download from: https://aka.ms/vs/17/release/vc_redist.x64.exe\n\n" +
-                                $"After installing, restart SwarmUI.";
-                            Logs.Info("[SDcpp] Download Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe");
-                        }
-                    }
-                    else if (isCuda)
-                    {
-                        (string installedVersion, string _) = DetectInstalledCudaVersion();
-                        errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
-                    }
-                    else
-                    {
-                        errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test.\nError output: {stderrText}";
-                    }
+                    errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test.\nError output: {stderrText}";
                     return false;
                 }
                 Logs.Info("[SDcpp] Runtime validation successful");
@@ -207,15 +181,7 @@ public class SDcppProcessManager : IDisposable
                         Logs.Info($"[SDcpp] {line.TrimEnd()}");
                     }
                 }
-                if (isCuda)
-                {
-                    (string installedVersion, string _) = DetectInstalledCudaVersion();
-                    errorMessage = BuildCudaErrorMessage(installedVersion, CudaDownloadUrl);
-                }
-                else
-                {
-                    errorMessage = $"Failed to launch SD.cpp executable: {ex.Message}";
-                }
+                errorMessage = $"Failed to launch SD.cpp executable: {ex.Message}";
                 return false;
             }
         }
@@ -227,43 +193,7 @@ public class SDcppProcessManager : IDisposable
         }
     }
 
-    /// <summary>Builds a detailed error message for CUDA runtime issues.</summary>
-    public static string BuildCudaErrorMessage(string installedVersion, string downloadUrl)
-    {
-        StringBuilder sb = new();
-        sb.AppendLine("SD.cpp CUDA binary failed to start due to missing or incompatible CUDA runtime.");
-        sb.AppendLine();
-        if (string.IsNullOrEmpty(installedVersion))
-        {
-            sb.AppendLine($"❌ No CUDA installation detected on your system.");
-            sb.AppendLine($"   SD.cpp requires CUDA {REQUIRED_CUDA_VERSION}.x runtime libraries.");
-        }
-        else if (!installedVersion.StartsWith(REQUIRED_CUDA_VERSION))
-        {
-            sb.AppendLine($"❌ CUDA version mismatch detected:");
-            sb.AppendLine($"   • Installed: CUDA {installedVersion}");
-            sb.AppendLine($"   • Required:  CUDA {REQUIRED_CUDA_VERSION}.x");
-            sb.AppendLine();
-            sb.AppendLine($"   The SD.cpp binary was compiled for CUDA {REQUIRED_CUDA_VERSION} and requires");
-            sb.AppendLine($"   the matching runtime DLLs (cudart64_12.dll, cublas64_12.dll, etc.).");
-        }
-        else
-        {
-            sb.AppendLine($"⚠️ CUDA {installedVersion} detected but runtime DLLs may not be in PATH.");
-            sb.AppendLine($"   Try adding the CUDA bin directory to your system PATH.");
-        }
-        sb.AppendLine();
-        sb.AppendLine("To fix this, choose one of these options:");
-        sb.AppendLine();
-        sb.AppendLine($"  1. Install CUDA {REQUIRED_CUDA_VERSION} Toolkit (includes runtime):");
-        sb.AppendLine($"     {downloadUrl}");
-        sb.AppendLine();
-        sb.AppendLine("  2. Switch to CPU mode:");
-        sb.AppendLine("     Change 'Device' to 'CPU (Universal)' in backend settings.");
-        sb.AppendLine("     (Slower but works without CUDA installation)");
-        Logs.Info($"[SDcpp] CUDA {REQUIRED_CUDA_VERSION} download page: {downloadUrl}");
-        return sb.ToString();
-    }
+    // CUDA runtime messaging removed (we now rely on runtime errors to surface issues)
 
     /// <summary>Constructs SD.cpp command-line arguments from generation parameters. Handles model paths, generation settings, memory optimization flags, and input images. Supports both standard SD models and Flux models with their multi-component architecture.</summary>
     /// <param name="parameters">Dictionary containing generation parameters like prompt, model, dimensions, etc.</param>
@@ -396,28 +326,6 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                string execDir = Path.GetDirectoryName(Settings.ExecutablePath);
-                if (!string.IsNullOrEmpty(execDir))
-                {
-                    List<string> libDirs = [execDir];
-                    string[] extraLibs = ["lib", "lib64"];
-                    foreach (string libFolder in extraLibs)
-                    {
-                        string candidate = Path.Combine(execDir, libFolder);
-                        if (Directory.Exists(candidate))
-                        {
-                            libDirs.Add(candidate);
-                        }
-                    }
-                    string existing = processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] ?? Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "";
-                    string combined = string.Join(':', libDirs.Where(dir => !string.IsNullOrEmpty(dir)));
-                    string newValue = string.IsNullOrEmpty(existing) ? combined : $"{combined}:{existing}";
-                    processInfo.EnvironmentVariables["LD_LIBRARY_PATH"] = newValue;
-                    Logs.Debug($"[SDcpp] Added library dirs to LD_LIBRARY_PATH: {combined}");
-                }
-            }
             if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
             {
                 processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
@@ -428,23 +336,6 @@ public class SDcppProcessManager : IDisposable
                 if (Settings.DebugMode)
                 {
                     Logs.Debug("[SDcpp] Forcing CPU-only mode via environment variables");
-                }
-            }
-            else if (Settings.Device.ToLowerInvariant() is "cuda")
-            {
-                string cudaBinPath = FindCudaBinDirectory();
-                if (!string.IsNullOrEmpty(cudaBinPath))
-                {
-                    string currentPath = processInfo.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH");
-                    processInfo.EnvironmentVariables["PATH"] = $"{cudaBinPath};{currentPath}";
-                    if (Settings.DebugMode)
-                    {
-                        Logs.Debug($"[SDcpp] Added CUDA bin to PATH: {cudaBinPath}");
-                    }
-                }
-                else
-                {
-                    Logs.Warning("[SDcpp] CUDA device selected but CUDA Toolkit installation not found. SD.cpp may fail if CUDA runtime DLLs are not in PATH.");
                 }
             }
             if (Settings.DebugMode)
@@ -537,23 +428,6 @@ public class SDcppProcessManager : IDisposable
                 processInfo.EnvironmentVariables["GGML_USE_METAL"] = "0";
                 processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = "0";
                 processInfo.EnvironmentVariables["GGML_USE_SYCL"] = "0";
-            }
-            else if (Settings.Device.Equals("cuda", StringComparison.InvariantCultureIgnoreCase))
-            {
-                string cudaBinPath = FindCudaBinDirectory();
-                if (!string.IsNullOrEmpty(cudaBinPath))
-                {
-                    string currentPath = processInfo.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH");
-                    processInfo.EnvironmentVariables["PATH"] = $"{cudaBinPath};{currentPath}";
-                    if (Settings.DebugMode)
-                    {
-                        Logs.Debug($"[SDcpp] Added CUDA bin to PATH: {cudaBinPath}");
-                    }
-                }
-                else
-                {
-                    Logs.Warning("[SDcpp] CUDA device selected but CUDA Toolkit installation not found. SD.cpp may fail if CUDA runtime DLLs are not in PATH.");
-                }
             }
             if (Settings.DebugMode)
             {

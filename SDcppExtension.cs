@@ -12,7 +12,7 @@ namespace Hartsy.Extensions.SDcppExtension;
 /// Registers the SD.cpp backend type and API endpoints during SwarmUI initialization.</summary>
 public class SDcppExtension : Extension
 {
-    public static new readonly string Version = "0.1.0";
+    public static new readonly string Version = "0.1.5";
 
     public static T2IRegisteredParam<string> SamplerParam;
     public static T2IRegisteredParam<string> SchedulerParam;
