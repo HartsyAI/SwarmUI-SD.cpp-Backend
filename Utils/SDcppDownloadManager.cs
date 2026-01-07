@@ -468,7 +468,7 @@ public static class SDcppDownloadManager
             $"#!/usr/bin/env bash\n" +
             $"set -euo pipefail\n" +
             $"LD_LIBRARY_PATH={executableDir}:$LD_LIBRARY_PATH exec \"{executablePath}\" \"$@\"\n";
-        File.WriteAllText(launcherPath, script, Encoding.UTF8);
+        File.WriteAllText(launcherPath, script, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         try
         {
             using Process chmod = Process.Start("chmod", $"+x \"{launcherPath}\"");
