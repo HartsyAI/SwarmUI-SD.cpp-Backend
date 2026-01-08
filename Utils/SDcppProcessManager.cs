@@ -14,6 +14,7 @@ public class SDcppProcessManager : IDisposable
     public readonly SDcppBackendSettings Settings;
     public readonly string WorkingDirectory;
     public bool Disposed = false;
+    public bool PreviewArgsSupported { get; private set; } = false;
 
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
@@ -167,6 +168,8 @@ public class SDcppProcessManager : IDisposable
                     errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test.\nError output: {stderrText}";
                     return false;
                 }
+                string stdoutTextFinal = stdout.ToString();
+                PreviewArgsSupported = stdoutTextFinal.Contains("--preview");
                 Logs.Info("[SDcpp] Runtime validation successful");
                 return true;
             }
@@ -205,11 +208,18 @@ public class SDcppProcessManager : IDisposable
         if (Settings.Threads > 0) args.Add($"--threads {Settings.Threads}");
         if (parameters.TryGetValue("enable_preview", out object enablePreview) && enablePreview is bool previewEnabled && previewEnabled)
         {
-            args.Add("--preview tae");
-            args.Add("--preview-interval 1");
-            if (parameters.TryGetValue("preview_path", out object previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
+            if (PreviewArgsSupported)
             {
-                args.Add($"--preview-path \"{previewPath}\"");
+                args.Add("--preview tae");
+                args.Add("--preview-interval 1");
+                if (parameters.TryGetValue("preview_path", out object previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
+                {
+                    args.Add($"--preview-path \"{previewPath}\"");
+                }
+            }
+            else
+            {
+                Logs.Warning("[SDcpp] Preview requested but executable does not support --preview arguments");
             }
         }
         bool vaeTiling = parameters.TryGetValue("vae_tiling", out object vaeTilingRaw) && vaeTilingRaw is bool vaeTilingVal && vaeTilingVal;
@@ -340,7 +350,7 @@ public class SDcppProcessManager : IDisposable
             }
             if (Settings.DebugMode)
             {
-                Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
+                if (Settings.DebugMode) Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
                 Logs.Debug($"[SDcpp] Working directory: {WorkingDirectory}");
             }
             Process = Process.Start(processInfo);
