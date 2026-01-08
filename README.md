@@ -169,6 +169,14 @@ Access settings via `Server → Backends → SD.cpp Backend`
 ## Usage Tips
 ----------
 
+## Known Issues
+----------------
+
+- **Slow generations** – Initial caching is slow and repeated runs do not yet reach expected speedups across architectures.
+- **Z-Image text encoder** – SD.cpp fails to load the shipped Qwen text encoder (`text_encoders.llm.model.*` tensors are missing), so Z-Image inference currently errors unless you manually provide a compatible encoder (GGUF version is confirmed to work).
+- **Previews** – TAESD preview images frequently fail to render because the SD.cpp binary reports `--preview` as unsupported on some builds; expect missing preview frames.
+- **Img2Img/Upscaling** – The backend has not been fully exercised with img2img or upscaling workflows, so their behavior remains unverified and may have undiscovered issues.
+
 ## Performance & Caching (TODO)
 ------------------------------
 

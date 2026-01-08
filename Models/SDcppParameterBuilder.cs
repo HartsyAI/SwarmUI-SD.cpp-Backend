@@ -324,7 +324,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         else
         {
             T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
-            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("Qwen3-4B-Instruct-2507", StringComparison.OrdinalIgnoreCase));
+            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase));
             if (existingQwen is not null)
             {
                 parameters["llm"] = existingQwen.RawFilePath;
@@ -333,8 +333,8 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             else
             {
                 Logs.Info("[SDcpp] Z-Image requires Qwen model, auto-downloading...");
-                string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-                    "8b0d3adc92f9ef9d6b8d4e12b1236a7d8a3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f");
+                string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b.safetensors", "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+                    "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
                 if (!string.IsNullOrEmpty(qwenPath))
                 {
                     parameters["llm"] = qwenPath;
@@ -355,10 +355,18 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors or t5xxl_fp8_e4m3fn.safetensors)");
             if (missing.Count > 0)
             {
-                throw new InvalidOperationException($"Flux models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ",
-                    missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• CLIP-L, T5-XXL → Models/clip/");
+                throw new InvalidOperationException($"Flux models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• CLIP-L, T5-XXL → Models/clip/");
             }
             Logs.Info("[SDcpp] All Flux components found successfully");
+        }
+        if (isZImageModel)
+        {
+            if (!parameters.ContainsKey("llm")) missing.Add("Qwen LLM (qwen_3_4b.safetensors)");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Z-Image models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• Qwen LLM → Models/clip/");
+            }
+            Logs.Info("[SDcpp] All Z-Image components found successfully");
         }
         else if (isSD3Model)
         {
