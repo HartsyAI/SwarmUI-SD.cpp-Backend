@@ -207,7 +207,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             Logs.Debug($"[SDcpp] Using user-specified VAE: {vaeModel.Name}");
             return;
         }
-        if (!isFluxModel) return;
+        if (!isFluxModel && !isZImageModel) return;
         T2IModelHandler vaeModelSet = Program.T2IModelSets["VAE"];
         T2IModel defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => m.Name.Equals("ae.safetensors", StringComparison.OrdinalIgnoreCase) || m.Name.EndsWith("ae.safetensors", StringComparison.OrdinalIgnoreCase) ||
             (m.Name.Contains("flux", StringComparison.OrdinalIgnoreCase) && m.Name.Contains("ae", StringComparison.OrdinalIgnoreCase)));
@@ -218,7 +218,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         else
         {
-            Logs.Info("[SDcpp] Flux VAE not found, auto-downloading...");
+            Logs.Info($"[SDcpp] {(isFluxModel ? "Flux" : "Z-Image")} VAE not found, auto-downloading...");
             string vaePath = SDcppModelManager.EnsureModelExists("VAE", "Flux/ae.safetensors", "https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/flux_ae.safetensors", "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38");
             if (!string.IsNullOrEmpty(vaePath))
             {
