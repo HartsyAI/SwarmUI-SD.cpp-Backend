@@ -15,6 +15,7 @@ public class SDcppProcessManager : IDisposable
     public readonly string WorkingDirectory;
     public bool Disposed = false;
     public bool PreviewArgsSupported { get; private set; } = false;
+    public bool OutputArgSupported { get; private set; } = false;
 
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
@@ -170,6 +171,7 @@ public class SDcppProcessManager : IDisposable
                 }
                 string stdoutTextFinal = stdout.ToString();
                 PreviewArgsSupported = stdoutTextFinal.Contains("--preview");
+                OutputArgSupported = stdoutTextFinal.Contains("--output");
                 Logs.Info("[SDcpp] Runtime validation successful");
                 return true;
             }
@@ -267,7 +269,10 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("scheduler", out object scheduler)) args.Add($"--scheduler {scheduler}");
         if (parameters.TryGetValue("clip_skip", out object clipSkip)) args.Add($"--clip-skip {clipSkip}");
         if (parameters.TryGetValue("batch_count", out object batchCount)) args.Add($"--batch-count {batchCount}");
-        if (parameters.TryGetValue("output", out object output)) args.Add($"--output \"{output}\"");
+        if (parameters.TryGetValue("output", out object output) && OutputArgSupported)
+        {
+            args.Add($"--output \"{output}\"");
+        }
         if (!Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
         {
             if (vaeTiling) args.Add("--vae-tiling");
