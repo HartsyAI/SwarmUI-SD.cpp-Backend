@@ -170,7 +170,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         if ((isFluxModel || isSD3Model || isZImageModel) && mainModel is not null)
         {
             parameters["diffusion_model"] = mainModel.RawFilePath;
-            AddVAE(parameters, input, isFluxModel);
+            AddVAE(parameters, input, isFluxModel, isZImageModel);
             if (isSD3Model)
             {
                 AddSD3Encoders(parameters, input);
@@ -199,7 +199,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
     }
 
-    public void AddVAE(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel)
+    public void AddVAE(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel, bool isZImageModel = false)
     {
         if (input.TryGet(T2IParamTypes.VAE, out T2IModel vaeModel) && vaeModel is not null && vaeModel.Name is not "(none)")
         {
