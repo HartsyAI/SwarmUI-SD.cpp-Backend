@@ -324,7 +324,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         else
         {
             T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
-            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase));
+            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("Qwen3-4B-Instruct-2507", StringComparison.OrdinalIgnoreCase));
             if (existingQwen is not null)
             {
                 parameters["llm"] = existingQwen.RawFilePath;
@@ -333,8 +333,8 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             else
             {
                 Logs.Info("[SDcpp] Z-Image requires Qwen model, auto-downloading...");
-                string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b.safetensors", "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
-                    "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
+                string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+                    "8b0d3adc92f9ef9d6b8d4e12b1236a7d8a3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f");
                 if (!string.IsNullOrEmpty(qwenPath))
                 {
                     parameters["llm"] = qwenPath;
