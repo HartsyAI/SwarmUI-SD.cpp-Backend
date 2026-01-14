@@ -315,6 +315,7 @@ public class SDcppBackend : AbstractT2IBackend
 
             string tempDir = Path.Combine(Path.GetTempPath(), "sdcpp_output", Guid.NewGuid().ToString());
             Directory.CreateDirectory(tempDir);
+            Logs.Debug($"[SDcpp] Temp output directory: {tempDir}");
 
             try
             {
@@ -324,6 +325,7 @@ public class SDcppBackend : AbstractT2IBackend
                 string previewPath = Path.Combine(tempDir, "preview.png");
                 parameters["enable_preview"] = true;
                 parameters["preview_path"] = previewPath;
+                Logs.Debug($"[SDcpp] Preview enabled. Path: {previewPath}");
 
                 long startTime = Environment.TickCount64;
                 int lastStep = 0;
@@ -341,7 +343,10 @@ public class SDcppBackend : AbstractT2IBackend
                             lastStep = currentStep;
                             lastPreviewCheck = DateTime.Now;
 
+                            Logs.Debug($"[SDcpp] Progress update: step={currentStep}/{totalSteps}, progress={progress:0.000}");
                             SendProgressUpdate(batchId, user_input, takeOutput, previewPath, progress);
+                            Logs.Debug($"[SDcpp] Preview file exists: {File.Exists(previewPath)}");
+                            Logs.Debug($"[SDcpp] Preview file size: {new FileInfo(previewPath).Length} bytes");
                         }
                     });
 
@@ -419,8 +424,11 @@ public class SDcppBackend : AbstractT2IBackend
         {
             try
             {
+                FileInfo previewInfo = new(previewPath);
+                Logs.Debug($"[SDcpp] Preview file found. Path={previewPath}, Size={previewInfo.Length} bytes, LastWrite={previewInfo.LastWriteTimeUtc:O}");
                 byte[] previewBytes = File.ReadAllBytes(previewPath);
                 string previewBase64 = Convert.ToBase64String(previewBytes);
+                Logs.Debug($"[SDcpp] Preview bytes read: {previewBytes.Length} bytes (progress={progress:0.000})");
 
                 takeOutput(new Newtonsoft.Json.Linq.JObject
                 {
@@ -433,11 +441,13 @@ public class SDcppBackend : AbstractT2IBackend
             }
             catch (IOException)
             {
+                Logs.Debug($"[SDcpp] Preview file locked or unreadable: {previewPath}");
                 // File locked, skip this update
             }
         }
         else
         {
+            Logs.Debug($"[SDcpp] Preview file missing at progress {progress:0.000}: {previewPath}");
             // Send progress without preview
             takeOutput(new Newtonsoft.Json.Linq.JObject
             {

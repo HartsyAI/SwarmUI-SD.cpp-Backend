@@ -251,6 +251,7 @@ public class SDcppProcessManager : IDisposable
             if (parameters.TryGetValue("clip_g", out object clipG) && !string.IsNullOrEmpty(clipG.ToString())) args.Add($"--clip_g \"{clipG}\"");
             if (parameters.TryGetValue("clip_l", out object clipL) && !string.IsNullOrEmpty(clipL.ToString())) args.Add($"--clip_l \"{clipL}\"");
             if (parameters.TryGetValue("t5xxl", out object t5xxl) && !string.IsNullOrEmpty(t5xxl.ToString())) args.Add($"--t5xxl \"{t5xxl}\"");
+            if (parameters.TryGetValue("llm", out object llm) && !string.IsNullOrEmpty(llm.ToString())) args.Add($"--llm \"{llm}\"");
             if (parameters.TryGetValue("vae", out object multiVae) && !string.IsNullOrEmpty(multiVae.ToString())) args.Add($"--vae \"{multiVae}\"");
         }
         else
