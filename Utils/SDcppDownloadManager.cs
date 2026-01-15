@@ -155,59 +155,91 @@ public static class SDcppDownloadManager
     /// <param name="cudaVersion">CUDA version (11 or 12), only used when deviceType is "cuda"</param>
     public static async Task<DownloadInfo> GetDownloadInfo(string deviceType, string cudaVersion = "12")
     {
+        (DownloadInfo info, _, _) = await GetDownloadInfoWithCache(deviceType, cudaVersion, null);
+        return info;
+    }
+
+    /// <summary>Gets download information for the current platform from GitHub releases with optional ETag caching.</summary>
+    /// <param name="deviceType">Device type (cpu, cuda, vulkan)</param>
+    /// <param name="cudaVersion">CUDA version (11 or 12), only used when deviceType is "cuda"</param>
+    /// <param name="etag">ETag from previous release query, if any</param>
+    /// <returns>Tuple of download info, whether the release data is unchanged, and the new ETag (if available).</returns>
+    public static async Task<(DownloadInfo Info, bool NotModified, string ETag)> GetDownloadInfoWithCache(string deviceType, string cudaVersion = "12", string etag = null)
+    {
         try
         {
             Logs.Info("[SDcpp] Fetching latest release from GitHub...");
             using HttpRequestMessage request = new(HttpMethod.Get, GITHUB_API_URL);
             request.Headers.Add("User-Agent", "SwarmUI-SDcpp-Extension");
+            if (!string.IsNullOrEmpty(etag))
+            {
+                request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+            }
             using HttpResponseMessage responseMessage = await Utilities.UtilWebClient.SendAsync(request);
+            if (responseMessage.StatusCode == System.Net.HttpStatusCode.NotModified)
+            {
+                Logs.Debug("[SDcpp] GitHub release data unchanged (ETag match)");
+                return (null, true, etag);
+            }
+            if (responseMessage.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                string remaining = responseMessage.Headers.TryGetValues("X-RateLimit-Remaining", out IEnumerable<string> values)
+                    ? values.FirstOrDefault()
+                    : null;
+                if (remaining == "0")
+                {
+                    Logs.Warning("[SDcpp] GitHub API rate limit exceeded, skipping update check");
+                    return (null, false, etag);
+                }
+            }
             responseMessage.EnsureSuccessStatusCode();
             string response = await responseMessage.Content.ReadAsStringAsync();
+            string responseEtag = responseMessage.Headers.ETag?.Tag ?? etag;
             JObject releaseData = JObject.Parse(response);
             string tagName = releaseData["tag_name"]?.ToString();
             JArray assets = releaseData["assets"] as JArray;
             if (assets == null || assets.Count == 0)
             {
                 Logs.Warning("[SDcpp] No assets found in latest release, using fallback...");
-                return GetFallbackDownloadInfo(deviceType, cudaVersion);
+                return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
             }
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
                 JToken linuxAsset = FindLinuxAsset(assets, deviceType, cudaVersion);
                 if (linuxAsset != null)
                 {
-                    return CreateDownloadInfoFromAsset(linuxAsset, tagName);
+                    return (CreateDownloadInfoFromAsset(linuxAsset, tagName, responseEtag), false, responseEtag);
                 }
                 Logs.Warning("[SDcpp] No matching Linux asset in latest release, using fallback...");
-                return GetFallbackDownloadInfo(deviceType, cudaVersion);
+                return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
             }
 
             string assetPattern = GetPlatformAssetPattern(deviceType, cudaVersion);
             if (string.IsNullOrEmpty(assetPattern))
             {
                 Logs.Error("[SDcpp] Unsupported platform for automatic download.");
-                return null;
+                return (null, false, responseEtag);
             }
             foreach (JToken asset in assets)
             {
                 string name = asset["name"]?.ToString();
                 if (name != null && name.Contains(assetPattern, StringComparison.OrdinalIgnoreCase))
                 {
-                    return CreateDownloadInfoFromAsset(asset, tagName);
+                    return (CreateDownloadInfoFromAsset(asset, tagName, responseEtag), false, responseEtag);
                 }
             }
             Logs.Warning($"[SDcpp] No matching asset for pattern '{assetPattern}', using fallback...");
-            return GetFallbackDownloadInfo(deviceType, cudaVersion);
+            return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
         }
         catch (HttpRequestException ex)
         {
             Logs.Warning($"[SDcpp] GitHub API request failed ({ex.Message}), using fallback URLs...");
-            return GetFallbackDownloadInfo(deviceType, cudaVersion);
+            return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, etag);
         }
         catch (Exception ex)
         {
             Logs.Warning($"[SDcpp] Error fetching release info ({ex.Message}), using fallback URLs...");
-            return GetFallbackDownloadInfo(deviceType, cudaVersion);
+            return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, etag);
         }
     }
 
@@ -298,14 +330,15 @@ public static class SDcppDownloadManager
         return cpuCandidate ?? linuxAssets.FirstOrDefault();
     }
 
-    private static DownloadInfo CreateDownloadInfoFromAsset(JToken asset, string tagName)
+    private static DownloadInfo CreateDownloadInfoFromAsset(JToken asset, string tagName, string etag)
     {
         return new DownloadInfo
         {
             FileName = asset["name"]?.ToString(),
             DownloadUrl = asset["browser_download_url"]?.ToString(),
             Size = asset["size"]?.ToObject<long>() ?? 0,
-            TagName = tagName
+            TagName = tagName,
+            ETag = etag
         };
     }
 
@@ -381,6 +414,22 @@ public static class SDcppDownloadManager
             Logs.Info($"[SDcpp] Downloading {downloadInfo.FileName} ({sizeMB:F1} MB)...");
             Logs.Info($"[SDcpp] URL: {downloadInfo.DownloadUrl}");
             await Utilities.DownloadFile(downloadInfo.DownloadUrl, zipPath, (_, __, ___) => { });
+            if (!File.Exists(zipPath))
+            {
+                Logs.Error("[SDcpp] Download failed: archive missing");
+                return null;
+            }
+            long actualSize = new FileInfo(zipPath).Length;
+            if (actualSize <= 0)
+            {
+                Logs.Error("[SDcpp] Download failed: archive empty");
+                return null;
+            }
+            if (downloadInfo.Size > 0 && actualSize < downloadInfo.Size * 0.8)
+            {
+                Logs.Error($"[SDcpp] Download size mismatch: expected {downloadInfo.Size} bytes, got {actualSize} bytes");
+                return null;
+            }
             Logs.Info("[SDcpp] Download completed, extracting...");
             if (Directory.Exists(tempExtractDir))
             {
@@ -554,8 +603,31 @@ public static class SDcppDownloadManager
                 Logs.Info("[SDcpp] No version info found, will check for updates");
                 currentVersion = new VersionInfo { TagName = "unknown", InstalledDate = DateTime.MinValue };
             }
+            if (!string.IsNullOrEmpty(currentVersion.ExecutablePath) && !File.Exists(currentVersion.ExecutablePath))
+            {
+                Logs.Warning("[SDcpp] Version info executable missing, forcing update check");
+                currentVersion.TagName = "unknown";
+            }
+            if (!string.IsNullOrEmpty(currentVersion.DeviceType) && !string.Equals(currentVersion.DeviceType, deviceType, StringComparison.OrdinalIgnoreCase))
+            {
+                Logs.Info($"[SDcpp] Version info device mismatch ({currentVersion.DeviceType} != {deviceType}), forcing update check");
+                currentVersion.TagName = "unknown";
+            }
+            TimeSpan updateInterval = TimeSpan.FromHours(24);
+            if (currentVersion.LastUpdateCheck > DateTime.MinValue && DateTime.UtcNow - currentVersion.LastUpdateCheck < updateInterval && currentVersion.TagName is not "unknown")
+            {
+                Logs.Debug($"[SDcpp] Skipping update check (last checked {currentVersion.LastUpdateCheck:O})");
+                return false;
+            }
             Logs.Info($"[SDcpp] Checking for updates (current version: {currentVersion.TagName})...");
-            DownloadInfo latestRelease = await GetDownloadInfo(deviceType, cudaVersion);
+            (DownloadInfo latestRelease, bool notModified, string etag) = await GetDownloadInfoWithCache(deviceType, cudaVersion, currentVersion.ETag);
+            if (notModified)
+            {
+                currentVersion.LastUpdateCheck = DateTime.UtcNow;
+                SaveVersionInfo(versionInfoPath, currentVersion);
+                Logs.Debug("[SDcpp] Update check skipped (release data not modified)");
+                return false;
+            }
             if (latestRelease == null || string.IsNullOrEmpty(latestRelease.TagName))
             {
                 Logs.Warning("[SDcpp] Could not determine latest version from GitHub");
@@ -564,6 +636,10 @@ public static class SDcppDownloadManager
                 return false;
             }
             currentVersion.LastUpdateCheck = DateTime.UtcNow;
+            if (!string.IsNullOrEmpty(etag))
+            {
+                currentVersion.ETag = etag;
+            }
             SaveVersionInfo(versionInfoPath, currentVersion);
             bool isNewer = IsNewerVersion(currentVersion.TagName, latestRelease.TagName);
             if (isNewer)
@@ -613,7 +689,8 @@ public static class SDcppDownloadManager
                 InstalledDate = DateTime.UtcNow,
                 LastUpdateCheck = DateTime.UtcNow,
                 DeviceType = deviceType,
-                ExecutablePath = extractedExecutable
+                ExecutablePath = extractedExecutable,
+                ETag = downloadInfo.ETag
             };
             SaveVersionInfo(versionInfoPath, versionInfo);
             Logs.Info($"[SDcpp] Successfully installed version {downloadInfo.TagName}");
@@ -717,6 +794,7 @@ public static class SDcppDownloadManager
         public DateTime LastUpdateCheck { get; set; }
         public string DeviceType { get; set; }
         public string ExecutablePath { get; set; }
+        public string ETag { get; set; }
     }
 
     /// <summary>Information about a downloadable SD.cpp release asset</summary>
@@ -726,5 +804,6 @@ public static class SDcppDownloadManager
         public string DownloadUrl { get; set; }
         public long Size { get; set; }
         public string TagName { get; set; }
+        public string ETag { get; set; }
     }
 }
