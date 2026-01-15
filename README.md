@@ -202,6 +202,27 @@ Access settings via `Server → Backends → SD.cpp Backend`
 4. Reduce image dimensions
 5. Close other GPU applications
 
+### Dynamic VRAM Policy (Auto Offload)
+
+SwarmUI automatically applies SD.cpp offload flags when VRAM is tight. This system is always on and uses real
+model file sizes, GPU free VRAM, and generation parameters (resolution + batch count) to decide which flags are
+needed. It does **not** clear VRAM between generations, so models stay resident and repeat runs stay fast.
+
+**How it works:**
+- Computes an estimated VRAM footprint from model sizes + runtime overhead + resolution
+- Compares that to free VRAM with a safety margin
+- Gradually escalates offload flags only if required
+
+**Escalation order (more aggressive as needed):**
+1. `--vae-tiling`
+2. `--clip-on-cpu`
+3. `--vae-on-cpu`
+4. `--offload-to-cpu`
+
+**Notes:**
+- User-set flags are respected if they are *more aggressive* than the auto-policy.
+- Very low VRAM GPUs (<6 GB) will automatically enable all offload flags.
+
 ### LoRA Usage
 
 - **TODO**: Test and verify LoRA functionality with various models.

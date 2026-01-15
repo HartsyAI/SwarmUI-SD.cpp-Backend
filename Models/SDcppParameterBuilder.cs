@@ -1,4 +1,5 @@
 using Hartsy.Extensions.SDcppExtension.SwarmBackends;
+using Hartsy.Extensions.SDcppExtension.Utils;
 using SwarmUI.Core;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
@@ -43,29 +44,102 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             AddVideoParameters(parameters, input);
         }
 
+        // Apply dynamic VRAM policy (always runs, only adds flags when needed)
+        ApplyVramPolicy(parameters, input);
+
         // Set output path
         parameters["output"] = Path.Combine(outputDir, "generated_%03d.png");
 
         return parameters;
     }
 
+    /// <summary>Applies dynamic VRAM policy based on actual model sizes and available GPU VRAM.
+    /// Always runs but only sets offload flags when needed to prevent OOM.</summary>
+    public void ApplyVramPolicy(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        // Extract model paths from parameters
+        string diffusionPath = null;
+        List<string> encoderPaths = [];
+        string vaePath = null;
+
+        if (parameters.TryGetValue("diffusion_model", out object diffObj))
+        {
+            diffusionPath = diffObj?.ToString();
+        }
+        else if (parameters.TryGetValue("model", out object modelObj))
+        {
+            diffusionPath = modelObj?.ToString();
+        }
+
+        if (parameters.TryGetValue("clip_l", out object clipL))
+        {
+            encoderPaths.Add(clipL?.ToString());
+        }
+        if (parameters.TryGetValue("clip_g", out object clipG))
+        {
+            encoderPaths.Add(clipG?.ToString());
+        }
+        if (parameters.TryGetValue("t5xxl", out object t5))
+        {
+            encoderPaths.Add(t5?.ToString());
+        }
+        if (parameters.TryGetValue("llm", out object llm))
+        {
+            encoderPaths.Add(llm?.ToString());
+        }
+
+        if (parameters.TryGetValue("vae", out object vaeObj))
+        {
+            vaePath = vaeObj?.ToString();
+        }
+
+        // Evaluate VRAM policy
+        SDcppVramPolicy.PolicyResult policy = SDcppVramPolicy.Evaluate(
+            input,
+            diffusionPath,
+            encoderPaths.Where(p => !string.IsNullOrEmpty(p)),
+            vaePath
+        );
+
+        // Apply policy to parameters (respects user overrides if they're more aggressive)
+        SDcppVramPolicy.ApplyToParameters(parameters, policy, respectUserOverrides: true);
+    }
+
     public void AddPerformanceParameters(Dictionary<string, object> parameters, T2IParamInput input)
     {
-        if (SDcppExtension.MemoryMapParam is not null) parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
-        if (SDcppExtension.VAEConvDirectParam is not null) parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
-        if (SDcppExtension.VAETilingParam is not null) parameters["vae_tiling"] = input.Get(SDcppExtension.VAETilingParam, true, autoFixDefault: true);
+        // Memory mapping for faster model loading (not VRAM-related)
+        if (SDcppExtension.MemoryMapParam is not null)
+        {
+            parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
+        }
+
+        // VAE direct convolution for faster decoding
+        if (SDcppExtension.VAEConvDirectParam is not null)
+        {
+            parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
+        }
+
+        // Store user's explicit VRAM preferences (VRAM policy will respect these if more aggressive)
+        if (SDcppExtension.VAETilingParam is not null && input.TryGet(SDcppExtension.VAETilingParam, out bool userVaeTiling))
+        {
+            parameters["vae_tiling"] = userVaeTiling;
+        }
+        if (SDcppExtension.CLIPOnCPUParam is not null && input.TryGet(SDcppExtension.CLIPOnCPUParam, out bool userClipOnCpu))
+        {
+            parameters["clip_on_cpu"] = userClipOnCpu;
+        }
+        if (SDcppExtension.VAEOnCPUParam is not null && input.TryGet(SDcppExtension.VAEOnCPUParam, out bool userVaeOnCpu))
+        {
+            parameters["vae_on_cpu"] = userVaeOnCpu;
+        }
+
+        // Architecture-specific caching for performance
         bool isFlux = architecture is "flux";
         bool isSD3 = architecture is "sd3";
         bool isDiT = isFlux || isSD3 || architecture is "z-image" || architecture.Contains("wan");
-        bool isUNet = !(isDiT);
-        int width = input.Get(T2IParamTypes.Width, 512);
-        int height = input.Get(T2IParamTypes.Height, 512);
-        int batchCount = input.Get(T2IParamTypes.Images, 1);
-        bool highRes = (width >= 768 || height >= 768);
-        bool veryHighRes = (width >= 1024 || height >= 1024);
-        bool heavy = highRes || batchCount > 1;
-        bool veryHeavy = veryHighRes || batchCount > 2;
+        bool isUNet = !isDiT;
         string sampler = input.Get(SDcppExtension.SamplerParam, isFlux ? "euler" : "euler_a", autoFixDefault: true);
+
         if (isUNet)
         {
             parameters["cache_mode"] = "ucache";
@@ -76,17 +150,13 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["cache_mode"] = "cache-dit";
             parameters["cache_preset"] = "ultra";
         }
+
+        // Performance optimizations
         parameters["flash_attention"] = true;
         parameters["diffusion_conv_direct"] = true;
 
-        // TODO: Find a smarter way to auto enable CPU offloading.
-
-        //bool enableOffload = heavy || isFlux || isSD3;
-        //parameters["offload_to_cpu"] = enableOffload;
-        //bool moveClip = veryHeavy;
-        //bool moveVae = veryHeavy && isUNet; // avoid hurting DiT too much
-        //if (SDcppExtension.CLIPOnCPUParam is not null) parameters["clip_on_cpu"] = moveClip;
-        //if (SDcppExtension.VAEOnCPUParam is not null) parameters["vae_on_cpu"] = moveVae;
+        // Note: VRAM offload flags (vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu)
+        // are now handled dynamically by ApplyVramPolicy() which runs after model paths are known.
     }
 
     public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel)
