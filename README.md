@@ -268,27 +268,35 @@ Video-specific parameters:
 
 | Model Type | Status | Notes |
 |------------|--------|-------|
-| **Z-Image** |
-| Z-Image Turbo | Full | Uses Qwen LLM, auto-downloads components |
-| **Flux** |
-| FLUX.1-dev | Full | Requires 4 components, GGUF preferred |
-| FLUX.1-schnell | Full | 4-step variant |
+| **Z-Image** | | |
+| Z-Image | Full | Uses Qwen LLM, auto-downloads components |
+| **Flux** | | |
+| FLUX.1-dev | Full | Requires CLIP-L + T5-XXL + VAE components |
+| FLUX.1-schnell | Full | Distilled 4-step variant |
+| FLUX.1-Kontext-dev | Full | Image edit model (uses input image) |
 | FLUX.2-dev | Full | Latest Flux architecture |
-| **SD3** |
-| SD3 Medium | Full | Multi-component like Flux |
-| SD3.5 Large | Full | Multi-component architecture |
-| **SDXL** |
+| **Chroma** | | |
+| Chroma | Full | Flux-based distilled model |
+| Chroma1-Radiance | Full | Flux-based distilled model |
+| **Ovis** | | |
+| Ovis-Image | Full | Flux-based multimodal model |
+| **Qwen Image** | | |
+| Qwen Image | Full | Uses Qwen LLM component |
+| Qwen Image Edit | Full | Image edit model (uses input image + Qwen LLM) |
+| **SD3** | | |
+| SD3 | Full | CLIP-G + CLIP-L + T5-XXL components |
+| SD3.5 | Full | CLIP-G + CLIP-L + T5-XXL components |
+| **SDXL** | | |
 | SDXL Base | Full | Standard safetensors/ckpt |
 | SDXL Turbo | Full | 4-8 step variant |
 | SDXL Lightning | Full | Fast inference variant |
-| **SD 1.x/2.x** |
+| **SD 1.x/2.x** | | |
 | SD 1.5 | Full | 512x512 resolution |
 | SD 1.5 Turbo | Full | Fast variant |
 | SD 2.x | Full | 768x768 resolution |
-| **LCM** |
+| **LCM** | | |
 | LCM Models | Full | 2-8 step inference |
-| LCM LoRA | Full | LoRA-based LCM |
-| **Video** |
+| **Video** | | |
 | Wan 2.1 | Full | Text-to-video, image-to-video |
 | Wan 2.2 | Full | Dual-model system |
 
@@ -338,8 +346,10 @@ SwarmUI-SD.cpp-Backend/
 │   ├── SDcppModelManager.cs       # Model detection, validation, downloads
 │   └── SDcppParameterBuilder.cs   # Parameter conversion to SD.cpp CLI format
 ├── Utils/
+│   ├── GGUFConverter.cs           # GGUF conversion helpers
 │   ├── SDcppDownloadManager.cs    # Auto-download SD.cpp binaries
-│   └── SDcppProcessManager.cs     # Process execution and output capture
+│   ├── SDcppProcessManager.cs     # Process execution and output capture
+│   └── SDcppVramPolicy.cs         # Dynamic VRAM offload policy
 └── WebAPI/
     └── SDcppAPI.cs                # Additional API endpoints
 ```
@@ -349,12 +359,18 @@ SwarmUI-SD.cpp-Backend/
 **Model Formats:**
 - `.gguf` - Native SD.cpp format (Q2_K, Q4_K, Q8_0 quantization)
 - `.safetensors` - Standard format (recommended)
-- `.ckpt`, `.bin` - Legacy formats
-- `.sft` - Shortened safetensors
+- `.ckpt`, `.pth` - PyTorch checkpoint formats
 
 **Image Formats:**
-- PNG output (default)
-- JPG/JPEG support
+**Input (SD.cpp CLI):**
+- `.png`, `.jpg`/`.jpeg`, `.bmp`
+
+**Output (SD.cpp CLI):**
+- `.png` by default
+- `.jpg`/`.jpeg`/`.jpe` when the output path uses a JPEG extension
+
+**SwarmUI backend:**
+- SD.cpp output is requested as PNG; SwarmUI can convert images to other formats if needed.
 
 ## Performance Benchmarks
 ----------------------

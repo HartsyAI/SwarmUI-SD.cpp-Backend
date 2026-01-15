@@ -29,38 +29,117 @@ public static class SDcppModelManager
         return ext is ".safetensors" or ".sft" or ".ckpt" or ".bin";
     }
 
-    /// <summary>Detects the model architecture type (Flux, SD3, SDXL, SD15, etc.) based on filename, model class, and metadata.</summary>
+    /// <summary>Detects the model architecture type based on filename, model class, and metadata.
+    /// Supports: Flux (dev/schnell/kontext), Flux.2, SD3/SD3.5, SDXL, SD1.5, SD2, Chroma, Qwen Image, Z-Image, Ovis, Wan 2.1/2.2, and more.</summary>
     public static string DetectArchitecture(T2IModel model)
     {
         if (model is null) return "unknown";
         string filename = Path.GetFileNameWithoutExtension(model.RawFilePath).ToLowerInvariant();
         string modelName = model.Name.ToLowerInvariant();
-        string modelClass = model.ModelClass?.ID.ToLowerInvariant() ?? "";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("flux", StringComparison.InvariantCultureIgnoreCase) ?? false) || filename.Contains("flux") || modelName.Contains("flux")) return "flux";
-        if ((model.ModelClass?.ID?.ToLowerInvariant().Contains("sd3", StringComparison.InvariantCultureIgnoreCase) ?? false) || filename.Contains("sd3") || filename.Contains("sd3.5") || modelName.Contains("sd3")) return "sd3";
-        if (filename.Contains("z_image") || filename.Contains("z-image") || modelName.Contains("z_image") || modelName.Contains("z-image") || modelClass.Contains("z-image")) return "z-image";
+        string modelClass = model.ModelClass?.ID?.ToLowerInvariant() ?? "";
+
+        // Chroma models (check before Flux since Chroma is Flux-based)
+        if (modelClass.Contains("chroma-radiance") || filename.Contains("chroma-radiance") || filename.Contains("chroma_radiance") || modelName.Contains("chroma-radiance"))
+            return "chroma-radiance";
+        if (modelClass.Contains("chroma") || filename.Contains("chroma") || modelName.Contains("chroma"))
+            return "chroma";
+
+        // Ovis models (Flux-based multimodal)
+        if (modelClass.Contains("ovis") || filename.Contains("ovis") || modelName.Contains("ovis"))
+            return "ovis";
+
+        // Qwen Image models (check edit variants first)
+        if (modelClass.Contains("qwen-image-edit") || filename.Contains("qwen-image-edit") || filename.Contains("qwen_image_edit") || 
+            modelName.Contains("qwen-image-edit") || modelName.Contains("qwen_image_edit") ||
+            filename.Contains("qwen2.5-vl-edit") || filename.Contains("qwen2_5-vl-edit"))
+            return "qwen-image-edit";
+        if (modelClass.Contains("qwen-image") || filename.Contains("qwen-image") || filename.Contains("qwen_image") || 
+            modelName.Contains("qwen-image") || modelName.Contains("qwen_image") ||
+            filename.Contains("qwen2.5-vl") || filename.Contains("qwen2_5-vl"))
+            return "qwen-image";
+
+        // Z-Image models
+        if (filename.Contains("z_image") || filename.Contains("z-image") || modelName.Contains("z_image") || 
+            modelName.Contains("z-image") || modelClass.Contains("z-image"))
+            return "z-image";
+
+        // Flux models (various variants)
+        if (modelClass.Contains("flux") || filename.Contains("flux") || modelName.Contains("flux"))
+        {
+            // Flux Kontext (image editing)
+            if (filename.Contains("kontext") || modelName.Contains("kontext") || modelClass.Contains("kontext"))
+                return "flux-kontext";
+            // Flux.2 Dev
+            if (filename.Contains("flux.2") || filename.Contains("flux2") || modelName.Contains("flux.2") || 
+                modelName.Contains("flux2") || modelClass.Contains("flux.2"))
+                return "flux2-dev";
+            // Flux Schnell
+            if (filename.Contains("schnell") || modelName.Contains("schnell") || modelClass.Contains("schnell"))
+                return "flux-schnell";
+            // Flux Dev (default Flux)
+            return "flux-dev";
+        }
+
+        // SD3/SD3.5 models
+        if (modelClass.Contains("sd3") || filename.Contains("sd3") || modelName.Contains("sd3"))
+        {
+            if (filename.Contains("3.5") || filename.Contains("3_5") || modelName.Contains("3.5") || modelClass.Contains("sd3.5"))
+                return "sd3.5";
+            return "sd3";
+        }
+
+        // Wan video models
         if (filename.Contains("wan") || modelName.Contains("wan") || modelClass.Contains("wan"))
         {
-            if (filename.Contains("2.2") || modelName.Contains("2.2") || filename.Contains("2_2") || modelName.Contains("2_2")) return "wan-2.2";
-            if (filename.Contains("2.1") || modelName.Contains("2.1") || filename.Contains("2_1") || modelName.Contains("2_1")) return "wan-2.1";
-            return "wan";
+            if (filename.Contains("2.2") || modelName.Contains("2.2") || filename.Contains("2_2") || modelName.Contains("2_2"))
+                return "wan-2.2";
+            if (filename.Contains("2.1") || modelName.Contains("2.1") || filename.Contains("2_1") || modelName.Contains("2_1"))
+                return "wan-2.1";
+            return "wan-2.1"; // Default to 2.1
         }
-        if (modelClass.Contains("-i2v") || modelClass.Contains("image2video") || modelClass.Contains("-ti2v") || modelClass.Contains("-flf2v") || modelClass.Contains("video2world") || filename.Contains("i2v") ||
-            filename.Contains("ti2v") || filename.Contains("flf2v")) return "video";
+
+        // Generic video models
+        if (modelClass.Contains("-i2v") || modelClass.Contains("image2video") || modelClass.Contains("-ti2v") || 
+            modelClass.Contains("-flf2v") || modelClass.Contains("video2world") || 
+            filename.Contains("i2v") || filename.Contains("ti2v") || filename.Contains("flf2v"))
+            return "video";
+
+        // SDXL models
         if (modelClass.Contains("sdxl") || filename.Contains("sdxl"))
         {
-            if (filename.Contains("turbo") || modelName.Contains("turbo")) return "sdxl-turbo";
+            if (filename.Contains("turbo") || modelName.Contains("turbo"))
+                return "sdxl-turbo";
+            if (filename.Contains("lightning") || modelName.Contains("lightning"))
+                return "sdxl-lightning";
             return "sdxl";
         }
-        if (modelClass.Contains("stable-diffusion-v2") || modelClass.Contains("stable-diffusion-2")) return "sd2";
-        if (modelClass.Contains("stable-diffusion-v1") || modelClass.Contains("stable-diffusion-1"))
+
+        // SD2.x models
+        if (modelClass.Contains("stable-diffusion-v2") || modelClass.Contains("stable-diffusion-2") || 
+            filename.Contains("sd2") || filename.Contains("v2-"))
+            return "sd2";
+
+        // SD1.x models
+        if (modelClass.Contains("stable-diffusion-v1") || modelClass.Contains("stable-diffusion-1") ||
+            filename.Contains("sd1") || filename.Contains("v1-"))
         {
-            if (filename.Contains("turbo") || modelName.Contains("turbo")) return "sd15-turbo";
+            if (filename.Contains("turbo") || modelName.Contains("turbo"))
+                return "sd15-turbo";
             return "sd15";
         }
-        if (filename.Contains("lcm") || modelName.Contains("lcm")) return "lcm";
-        if (model.StandardWidth == 1024 && model.StandardHeight == 1024) return "sdxl";
-        if (model.StandardWidth == 512 && model.StandardHeight == 512) return "sd15";
+
+        // LCM models
+        if (filename.Contains("lcm") || modelName.Contains("lcm"))
+            return "lcm";
+
+        // Fallback based on resolution
+        if (model.StandardWidth == 1024 && model.StandardHeight == 1024)
+            return "sdxl";
+        if (model.StandardWidth == 512 && model.StandardHeight == 512)
+            return "sd15";
+        if (model.StandardWidth == 1328 && model.StandardHeight == 1328)
+            return "qwen-image"; // Qwen default resolution
+
         return "unknown";
     }
 
@@ -142,47 +221,160 @@ public static class SDcppModelManager
         List<string> features = [];
         switch (architecture)
         {
-            case "flux":
+            // Flux family
+            case "flux-dev":
                 features.AddRange(["flux", "flux-dev", "lora", "controlnet"]);
                 break;
-            case "sd3":
-                features.AddRange(["sd3", "sd3.5", "lora"]);
+            case "flux-schnell":
+                features.AddRange(["flux", "flux-schnell", "lora", "controlnet", "fast"]);
                 break;
-            case "sdxl":
-            case "sdxl-turbo":
-                features.AddRange(["sdxl", "lora", "controlnet"]);
-                if (architecture == "sdxl-turbo")
-                    features.Add("turbo");
+            case "flux-kontext":
+                features.AddRange(["flux", "flux-kontext", "image-edit", "lora"]);
                 break;
-            case "sd15":
-            case "sd15-turbo":
-            case "sd2":
-                features.AddRange(["lora", "controlnet"]);
-                if (architecture.Contains("turbo"))
-                    features.Add("turbo");
+            case "flux2-dev":
+                features.AddRange(["flux", "flux2", "flux2-dev", "lora", "controlnet"]);
                 break;
-            case "lcm":
-                features.AddRange(["lcm", "lora", "controlnet"]);
+
+            // Chroma family (Flux-based distilled)
+            case "chroma":
+                features.AddRange(["flux", "chroma", "distilled", "lora"]);
                 break;
+            case "chroma-radiance":
+                features.AddRange(["flux", "chroma", "chroma-radiance", "distilled", "lora"]);
+                break;
+
+            // Ovis (Flux-based multimodal)
+            case "ovis":
+                features.AddRange(["flux", "ovis", "multimodal", "lora"]);
+                break;
+
+            // Qwen Image family
+            case "qwen-image":
+                features.AddRange(["qwen-image", "lora"]);
+                break;
+            case "qwen-image-edit":
+                features.AddRange(["qwen-image", "qwen-image-edit", "image-edit", "lora"]);
+                break;
+
+            // Z-Image
             case "z-image":
                 features.AddRange(["z-image", "lora"]);
                 break;
+
+            // SD3 family
+            case "sd3":
+                features.AddRange(["sd3", "lora"]);
+                break;
+            case "sd3.5":
+                features.AddRange(["sd3", "sd3.5", "lora"]);
+                break;
+
+            // SDXL family
+            case "sdxl":
+                features.AddRange(["sdxl", "lora", "controlnet"]);
+                break;
+            case "sdxl-turbo":
+                features.AddRange(["sdxl", "turbo", "lora", "controlnet", "fast"]);
+                break;
+            case "sdxl-lightning":
+                features.AddRange(["sdxl", "lightning", "lora", "controlnet", "fast"]);
+                break;
+
+            // SD1.x/SD2.x family
+            case "sd15":
+                features.AddRange(["sd15", "lora", "controlnet"]);
+                break;
+            case "sd15-turbo":
+                features.AddRange(["sd15", "turbo", "lora", "controlnet", "fast"]);
+                break;
+            case "sd2":
+                features.AddRange(["sd2", "lora", "controlnet"]);
+                break;
+
+            // LCM
+            case "lcm":
+                features.AddRange(["lcm", "lora", "controlnet", "fast"]);
+                break;
+
+            // Video models
             case "wan-2.1":
+                features.AddRange(["video", "wan", "wan-2.1", "txt2vid", "img2vid"]);
+                break;
             case "wan-2.2":
-            case "wan":
-                features.AddRange(["video", "wan", "txt2vid", "img2vid"]);
-                if (architecture == "wan-2.1")
-                    features.Add("wan-2.1");
-                else if (architecture == "wan-2.2")
-                    features.Add("wan-2.2");
+                features.AddRange(["video", "wan", "wan-2.2", "txt2vid", "img2vid"]);
                 break;
             case "video":
                 features.AddRange(["video", "img2vid"]);
                 break;
+
             default:
                 features.AddRange(["lora", "controlnet"]);
                 break;
         }
         return features;
     }
+
+    /// <summary>Determines if the architecture supports image editing (requires input image).</summary>
+    public static bool IsImageEditArchitecture(string architecture) =>
+        architecture is "flux-kontext" or "qwen-image-edit";
+
+    /// <summary>Determines if the architecture is a video generation model.</summary>
+    public static bool IsVideoArchitecture(string architecture) =>
+        architecture is "wan-2.1" or "wan-2.2" or "video";
+
+    /// <summary>Determines if the architecture is Flux-based (includes Chroma, Ovis).</summary>
+    public static bool IsFluxBased(string architecture) =>
+        architecture is "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" or "chroma" or "chroma-radiance" or "ovis";
+
+    /// <summary>Determines if the architecture requires a Qwen LLM component.</summary>
+    public static bool RequiresQwenLLM(string architecture) =>
+        architecture is "z-image" or "qwen-image" or "qwen-image-edit";
+
+    /// <summary>Determines if the architecture is a distilled/fast model that works with fewer steps.</summary>
+    public static bool IsDistilledModel(string architecture) =>
+        architecture is "flux-schnell" or "chroma" or "chroma-radiance" or "sdxl-turbo" or "sdxl-lightning" or "sd15-turbo" or "lcm";
+
+    /// <summary>Gets the recommended minimum steps for a given architecture.</summary>
+    public static int GetRecommendedMinSteps(string architecture) => architecture switch
+    {
+        "flux-schnell" => 4,
+        "chroma" or "chroma-radiance" => 4,
+        "sdxl-turbo" or "sdxl-lightning" => 4,
+        "sd15-turbo" => 4,
+        "lcm" => 4,
+        "flux-dev" or "flux-kontext" or "flux2-dev" => 20,
+        "ovis" => 20,
+        "sd3" or "sd3.5" => 20,
+        "qwen-image" or "qwen-image-edit" => 20,
+        "z-image" => 20,
+        _ => 20
+    };
+
+    /// <summary>Gets the recommended CFG scale for a given architecture.</summary>
+    public static double GetRecommendedCFG(string architecture) => architecture switch
+    {
+        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" => 1.0,
+        "chroma" or "chroma-radiance" or "ovis" => 1.0,
+        "sdxl-turbo" or "sdxl-lightning" => 1.0,
+        "sd15-turbo" or "lcm" => 1.0,
+        "sd3" or "sd3.5" => 4.5,
+        "qwen-image" or "qwen-image-edit" => 5.0,
+        "z-image" => 5.0,
+        _ => 7.0
+    };
+
+    /// <summary>Gets the default resolution for a given architecture.</summary>
+    public static (int width, int height) GetDefaultResolution(string architecture) => architecture switch
+    {
+        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" => (1024, 1024),
+        "chroma" or "chroma-radiance" or "ovis" => (1024, 1024),
+        "sd3" or "sd3.5" => (1024, 1024),
+        "sdxl" or "sdxl-turbo" or "sdxl-lightning" => (1024, 1024),
+        "qwen-image" or "qwen-image-edit" => (1328, 1328),
+        "z-image" => (1024, 1024),
+        "sd15" or "sd15-turbo" or "sd2" => (512, 512),
+        "lcm" => (512, 512),
+        "wan-2.1" or "wan-2.2" or "video" => (832, 480),
+        _ => (512, 512)
+    };
 }

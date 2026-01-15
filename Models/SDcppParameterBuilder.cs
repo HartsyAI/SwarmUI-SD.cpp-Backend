@@ -18,19 +18,30 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     {
         Dictionary<string, object> parameters = [];
 
-        bool isFluxModel = architecture is "flux";
-        bool isSD3Model = architecture is "sd3";
-        bool isZImageModel = architecture    is "z-image";
-        bool isVideoModel = architecture.Contains("wan") || architecture is "video";
+        // Use SDcppModelManager helpers for architecture detection
+        bool isFluxBased = SDcppModelManager.IsFluxBased(architecture);
+        bool isSD3Model = architecture is "sd3" or "sd3.5";
+        bool isZImageModel = architecture is "z-image";
+        bool isQwenImageModel = architecture is "qwen-image" or "qwen-image-edit";
+        bool isVideoModel = SDcppModelManager.IsVideoArchitecture(architecture);
+        bool isImageEditModel = SDcppModelManager.IsImageEditArchitecture(architecture);
+        bool requiresQwenLLM = SDcppModelManager.RequiresQwenLLM(architecture);
+        bool isDistilled = SDcppModelManager.IsDistilledModel(architecture);
 
         // Add performance and processing parameters
         AddPerformanceParameters(parameters, input);
 
         // Add basic generation parameters
-        AddBasicParameters(parameters, input, isFluxModel);
+        AddBasicParameters(parameters, input, isFluxBased, isDistilled);
 
-        // Add model and components
-        AddModelComponents(parameters, input, isFluxModel, isSD3Model, isZImageModel);
+        // Add model and components based on architecture
+        AddModelComponents(parameters, input, isFluxBased, isSD3Model, isZImageModel, isQwenImageModel, requiresQwenLLM);
+
+        // Add image edit parameters if applicable
+        if (isImageEditModel)
+        {
+            AddImageEditParameters(parameters, input, outputDir);
+        }
 
         // Add image parameters (init image, mask, controlnet)
         AddImageParameters(parameters, input, outputDir);
@@ -47,8 +58,15 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         // Apply dynamic VRAM policy (always runs, only adds flags when needed)
         ApplyVramPolicy(parameters, input);
 
-        // Set output path
-        parameters["output"] = Path.Combine(outputDir, "generated_%03d.png");
+        // Set output path (video uses different format)
+        if (isVideoModel)
+        {
+            parameters["output"] = Path.Combine(outputDir, "generated_%03d.mp4");
+        }
+        else
+        {
+            parameters["output"] = Path.Combine(outputDir, "generated_%03d.png");
+        }
 
         return parameters;
     }
@@ -134,11 +152,12 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
 
         // Architecture-specific caching for performance
-        bool isFlux = architecture is "flux";
-        bool isSD3 = architecture is "sd3";
-        bool isDiT = isFlux || isSD3 || architecture is "z-image" || architecture.Contains("wan");
+        bool isFluxBased = SDcppModelManager.IsFluxBased(architecture);
+        bool isSD3 = architecture is "sd3" or "sd3.5";
+        bool isQwenImage = architecture is "qwen-image" or "qwen-image-edit";
+        bool isDiT = isFluxBased || isSD3 || architecture is "z-image" || isQwenImage || SDcppModelManager.IsVideoArchitecture(architecture);
         bool isUNet = !isDiT;
-        string sampler = input.Get(SDcppExtension.SamplerParam, isFlux ? "euler" : "euler_a", autoFixDefault: true);
+        string sampler = input.Get(SDcppExtension.SamplerParam, isFluxBased ? "euler" : "euler_a", autoFixDefault: true);
 
         if (isUNet)
         {
@@ -159,7 +178,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         // are now handled dynamically by ApplyVramPolicy() which runs after model paths are known.
     }
 
-    public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel)
+    public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxBased, bool isDistilled)
     {
         if (input.TryGet(T2IParamTypes.Prompt, out string prompt))
         {
@@ -176,40 +195,62 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         if (input.TryGet(T2IParamTypes.NegativePrompt, out string negPrompt))
         {
-            parameters["negative_prompt"] = negPrompt;
+            // Flux-based models don't use negative prompts effectively
+            if (!isFluxBased)
+            {
+                parameters["negative_prompt"] = negPrompt;
+            }
+            else if (!string.IsNullOrWhiteSpace(negPrompt))
+            {
+                Logs.Debug("[SDcpp] Flux-based models do not benefit from negative prompts, ignoring");
+            }
         }
         if (input.TryGet(T2IParamTypes.Width, out int width)) parameters["width"] = width;
         if (input.TryGet(T2IParamTypes.Height, out int height)) parameters["height"] = height;
+
+        // Handle steps with architecture-aware defaults
+        int recommendedMinSteps = SDcppModelManager.GetRecommendedMinSteps(architecture);
         if (input.TryGet(T2IParamTypes.Steps, out int steps))
         {
-            if (isFluxModel && steps is 0)
+            if (steps <= 0)
             {
-                bool isSchnell = modelName.Contains("schnell", StringComparison.InvariantCultureIgnoreCase);
-                steps = isSchnell ? 4 : 20;
-                Logs.Info($"[SDcpp] Using default Flux steps: {steps}");
+                steps = recommendedMinSteps;
+                Logs.Info($"[SDcpp] Using default steps for {architecture}: {steps}");
+            }
+            else if (steps < recommendedMinSteps && isDistilled)
+            {
+                Logs.Debug($"[SDcpp] Using {steps} steps (distilled model minimum: {recommendedMinSteps})");
             }
             parameters["steps"] = steps;
         }
+
+        // Handle CFG scale with architecture-aware recommendations
+        double recommendedCFG = SDcppModelManager.GetRecommendedCFG(architecture);
         if (input.TryGet(T2IParamTypes.CFGScale, out double cfgScale))
         {
-            if (isFluxModel && Math.Abs(cfgScale - 1.0) > 0.0001)
+            if (isFluxBased && Math.Abs(cfgScale - 1.0) > 0.5)
             {
-                Logs.Warning($"[SDcpp] Flux models work best with CFG scale 1.0 (current: {cfgScale})");
+                Logs.Warning($"[SDcpp] {architecture} works best with CFG scale ~1.0 (current: {cfgScale})");
             }
             parameters["cfg_scale"] = cfgScale;
         }
+
         if (input.TryGet(T2IParamTypes.Seed, out long seed)) parameters["seed"] = seed;
-        string sampler = isFluxModel ? "euler" : "euler_a";
+
+        // Handle sampler selection
+        string defaultSampler = isFluxBased ? "euler" : "euler_a";
+        string sampler = defaultSampler;
         if (SDcppExtension.SamplerParam is not null && input.TryGet(SDcppExtension.SamplerParam, out string userSampler))
         {
             sampler = userSampler;
         }
-        if (isFluxModel && sampler is not "euler")
+        if (isFluxBased && sampler is not "euler")
         {
-            Logs.Info($"[SDcpp] Flux works best with euler sampler (requested: {sampler})");
+            Logs.Debug($"[SDcpp] Flux-based models work best with euler sampler (requested: {sampler})");
             sampler = "euler";
         }
         parameters["sampling_method"] = sampler;
+
         if (SDcppExtension.SchedulerParam is not null && input.TryGet(SDcppExtension.SchedulerParam, out string scheduler) && !string.IsNullOrEmpty(scheduler) && scheduler is not "default")
         {
             parameters["scheduler"] = scheduler;
@@ -226,41 +267,68 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         {
             parameters["batch_count"] = batchCount;
         }
-        if (isFluxModel && input.TryGet(T2IParamTypes.FluxGuidanceScale, out double fluxGuidance))
+
+        // Flux guidance scale (applies to all Flux-based models)
+        if (isFluxBased && input.TryGet(T2IParamTypes.FluxGuidanceScale, out double fluxGuidance))
         {
             parameters["guidance"] = fluxGuidance;
             Logs.Debug($"[SDcpp] Flux guidance scale: {fluxGuidance}");
         }
     }
 
-    public void AddModelComponents(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxModel, bool isSD3Model, bool isZImageModel)
+    public void AddModelComponents(Dictionary<string, object> parameters, T2IParamInput input, 
+        bool isFluxBased, bool isSD3Model, bool isZImageModel, bool isQwenImageModel, bool requiresQwenLLM)
     {
         if (string.IsNullOrEmpty(modelName)) return;
         T2IModel mainModel = Program.T2IModelSets["Stable-Diffusion"].Models.Values.FirstOrDefault(m => m.Name == modelName);
-        if ((isFluxModel || isSD3Model || isZImageModel) && mainModel is not null)
+        
+        // DiT-based models use diffusion_model parameter
+        bool isDiTModel = isFluxBased || isSD3Model || isZImageModel || isQwenImageModel;
+        
+        if (isDiTModel && mainModel is not null)
         {
             parameters["diffusion_model"] = mainModel.RawFilePath;
-            AddVAE(parameters, input, isFluxModel, isZImageModel);
+            
+            // Add VAE (Flux-based and Z-Image share the same Flux VAE)
+            bool needsFluxVAE = isFluxBased || isZImageModel;
+            AddVAE(parameters, input, needsFluxVAE, isZImageModel);
+            
+            // Add text encoders based on architecture
             if (isSD3Model)
             {
+                // SD3 needs CLIP-G, CLIP-L, and T5-XXL
                 AddSD3Encoders(parameters, input);
-            }
-            else if (isFluxModel || isSD3Model)
-            {
                 AddCLIPEncoders(parameters, input);
-            }
-            if (!isZImageModel)
-            {
                 AddT5XXL(parameters, input);
             }
-            if (isZImageModel)
+            else if (isFluxBased)
+            {
+                // Flux-based models need CLIP-L and T5-XXL (no CLIP-G)
+                AddCLIPEncoders(parameters, input);
+                AddT5XXL(parameters, input);
+            }
+            else if (isZImageModel)
+            {
+                // Z-Image uses Qwen LLM instead of CLIP/T5
+                AddQwenLLM(parameters, input);
+            }
+            else if (isQwenImageModel)
+            {
+                // Qwen Image models use Qwen LLM
+                AddQwenLLM(parameters, input);
+            }
+            
+            // Some architectures may need additional LLM components
+            if (requiresQwenLLM && !parameters.ContainsKey("llm"))
             {
                 AddQwenLLM(parameters, input);
             }
-            ValidateRequiredComponents(parameters, isFluxModel, isSD3Model, isZImageModel);
+            
+            ValidateRequiredComponents(parameters, isFluxBased, isSD3Model, isZImageModel, isQwenImageModel);
         }
         else if (mainModel is not null)
         {
+            // UNet-based models (SD1.5, SD2, SDXL) use model parameter
             parameters["model"] = mainModel.RawFilePath;
             if (input.TryGet(T2IParamTypes.VAE, out T2IModel vaeModel) && vaeModel is not null && vaeModel.Name is not "(none)")
             {
@@ -414,29 +482,20 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     }
 
     public void ValidateRequiredComponents(Dictionary<string, object> parameters,
-        bool isFluxModel, bool isSD3Model, bool isZImageModel)
+        bool isFluxBased, bool isSD3Model, bool isZImageModel, bool isQwenImageModel)
     {
         List<string> missing = [];
 
-        if (isFluxModel)
+        if (isFluxBased)
         {
             if (!parameters.ContainsKey("vae")) missing.Add("VAE (ae.safetensors)");
             if (!parameters.ContainsKey("clip_l")) missing.Add("CLIP-L (clip_l.safetensors)");
             if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors or t5xxl_fp8_e4m3fn.safetensors)");
             if (missing.Count > 0)
             {
-                throw new InvalidOperationException($"Flux models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• CLIP-L, T5-XXL → Models/clip/");
+                throw new InvalidOperationException($"Flux-based models ({architecture}) require additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• CLIP-L, T5-XXL → Models/clip/");
             }
-            Logs.Info("[SDcpp] All Flux components found successfully");
-        }
-        if (isZImageModel)
-        {
-            if (!parameters.ContainsKey("llm")) missing.Add("Qwen LLM (qwen_3_4b.safetensors)");
-            if (missing.Count > 0)
-            {
-                throw new InvalidOperationException($"Z-Image models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• Qwen LLM → Models/clip/");
-            }
-            Logs.Info("[SDcpp] All Z-Image components found successfully");
+            Logs.Info($"[SDcpp] All {architecture} components found successfully");
         }
         else if (isSD3Model)
         {
@@ -445,19 +504,74 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors)");
             if (missing.Count > 0)
             {
-                throw new InvalidOperationException($"SD3 models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}");
+                throw new InvalidOperationException($"SD3 models require additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nPlace in: Models/clip/");
             }
             Logs.Info("[SDcpp] All SD3 components found successfully");
         }
         else if (isZImageModel)
         {
-            if (!parameters.ContainsKey("vae")) missing.Add("VAE (flux-ae.safetensors)");
+            if (!parameters.ContainsKey("vae")) missing.Add("VAE (ae.safetensors)");
             if (!parameters.ContainsKey("llm")) missing.Add("Qwen LLM (qwen_3_4b.safetensors)");
             if (missing.Count > 0)
             {
-                throw new InvalidOperationException($"Z-Image models require additional component files that are not installed.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}");
+                throw new InvalidOperationException($"Z-Image models require additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. Place in:\n• VAE → Models/VAE/\n• Qwen LLM → Models/clip/");
             }
             Logs.Info("[SDcpp] All Z-Image components found successfully");
+        }
+        else if (isQwenImageModel)
+        {
+            if (!parameters.ContainsKey("llm")) missing.Add("Qwen LLM (qwen_3_4b.safetensors or similar)");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Qwen Image models require additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. Place in: Models/clip/");
+            }
+            Logs.Info("[SDcpp] All Qwen Image components found successfully");
+        }
+    }
+
+    /// <summary>Adds parameters for image editing models (Flux Kontext, Qwen Image Edit).</summary>
+    public void AddImageEditParameters(Dictionary<string, object> parameters, T2IParamInput input, string outputDir)
+    {
+        // Image edit models require an input image
+        if (!input.TryGet(T2IParamTypes.InitImage, out Image editImage) || editImage is null)
+        {
+            Logs.Warning($"[SDcpp] {architecture} is an image edit model but no input image was provided");
+            return;
+        }
+
+        // For Flux Kontext, the input image is used as reference
+        if (architecture is "flux-kontext")
+        {
+            string editImagePath = Path.Combine(outputDir, "edit_input.png");
+            File.WriteAllBytes(editImagePath, editImage.RawData);
+            parameters["init_img"] = editImagePath;
+            
+            // Kontext uses strength to control how much to preserve from original
+            if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
+            {
+                parameters["strength"] = strength;
+            }
+            else
+            {
+                parameters["strength"] = 0.75; // Default for image editing
+            }
+            Logs.Debug($"[SDcpp] Flux Kontext image edit mode enabled");
+        }
+        else if (architecture is "qwen-image-edit")
+        {
+            string editImagePath = Path.Combine(outputDir, "edit_input.png");
+            File.WriteAllBytes(editImagePath, editImage.RawData);
+            parameters["init_img"] = editImagePath;
+            
+            if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
+            {
+                parameters["strength"] = strength;
+            }
+            else
+            {
+                parameters["strength"] = 0.8; // Default for Qwen edit
+            }
+            Logs.Debug($"[SDcpp] Qwen Image Edit mode enabled");
         }
     }
 

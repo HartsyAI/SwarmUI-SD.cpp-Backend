@@ -63,8 +63,8 @@ public class SDcppVramPolicy
             }
 
             NvidiaUtil.NvidiaInfo gpu = gpus[gpuIndex];
-            result.TotalVramBytes = gpu.TotalMemory.Bytes;
-            result.FreeVramBytes = gpu.FreeMemory.Bytes;
+            result.TotalVramBytes = gpu.TotalMemory.InBytes;
+            result.FreeVramBytes = gpu.FreeMemory.InBytes;
 
             double totalVramGB = result.TotalVramBytes / (1024.0 * 1024.0 * 1024.0);
             double freeVramGB = result.FreeVramBytes / (1024.0 * 1024.0 * 1024.0);

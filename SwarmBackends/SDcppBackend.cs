@@ -306,9 +306,9 @@ public class SDcppBackend : AbstractT2IBackend
                 throw new InvalidOperationException("Process manager not initialized");
 
             Logs.Info("[SDcpp] Starting live generation");
-            bool isFluxModel = CurrentModelArchitecture is "flux";
+            bool isFluxBased = SDcppModelManager.IsFluxBased(CurrentModelArchitecture);
 
-            if (isFluxModel)
+            if (isFluxBased)
             {
                 ValidateFluxParameters(user_input);
             }
@@ -332,7 +332,7 @@ public class SDcppBackend : AbstractT2IBackend
                 DateTime lastPreviewCheck = DateTime.MinValue;
 
                 (bool success, string output, string error) = await ProcessManager.ExecuteWithProgressAsync(
-                    parameters, isFluxModel,
+                    parameters, isFluxBased,
                     progress =>
                     {
                         int totalSteps = user_input.Get(T2IParamTypes.Steps, 20);
@@ -384,8 +384,8 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             if (ProcessManager is null) throw new InvalidOperationException("Process manager not initialized");
-            bool isFluxModel = CurrentModelArchitecture is "flux";
-            if (isFluxModel)
+            bool isFluxBased = SDcppModelManager.IsFluxBased(CurrentModelArchitecture);
+            if (isFluxBased)
             {
                 ValidateFluxParameters(input);
             }
@@ -395,7 +395,7 @@ public class SDcppBackend : AbstractT2IBackend
             {
                 SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture);
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(input, tempDir);
-                (bool success, string output, string error) = await ProcessManager.ExecuteAsync(parameters, isFluxModel);
+                (bool success, string output, string error) = await ProcessManager.ExecuteAsync(parameters, isFluxBased);
                 if (!success)
                 {
                     Logs.Error($"[SDcpp] Generation failed: {error}");
@@ -515,25 +515,30 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
-            if (input.TryGet(T2IParamTypes.CFGScale, out double cfgScale) && cfgScale is not 1.0)
+            // Get recommended values for this architecture
+            double recommendedCFG = SDcppModelManager.GetRecommendedCFG(CurrentModelArchitecture);
+            int recommendedMinSteps = SDcppModelManager.GetRecommendedMinSteps(CurrentModelArchitecture);
+            bool isDistilled = SDcppModelManager.IsDistilledModel(CurrentModelArchitecture);
+
+            if (input.TryGet(T2IParamTypes.CFGScale, out double cfgScale) && Math.Abs(cfgScale - recommendedCFG) > 0.5)
             {
-                Logs.Warning($"[SDcpp] Flux models work best with CFG scale 1.0 (current: {cfgScale})");
+                Logs.Warning($"[SDcpp] {CurrentModelArchitecture} works best with CFG scale ~{recommendedCFG} (current: {cfgScale})");
             }
 
             if (input.TryGet(T2IParamTypes.NegativePrompt, out string negPrompt) && !string.IsNullOrWhiteSpace(negPrompt))
             {
-                Logs.Warning("[SDcpp] Flux models do not benefit from negative prompts");
+                Logs.Debug($"[SDcpp] {CurrentModelArchitecture} does not benefit from negative prompts");
             }
 
-            if (input.TryGet(T2IParamTypes.Steps, out int steps))
+            if (input.TryGet(T2IParamTypes.Steps, out int steps) && steps < recommendedMinSteps)
             {
-                bool isSchnell = CurrentModelName.Contains("schnell", StringComparison.InvariantCultureIgnoreCase);
-                int minSteps = isSchnell ? 4 : 20;
-                if (steps < minSteps)
+                if (isDistilled)
                 {
-                    string modelType = isSchnell ? "Flux-schnell" : "Flux-dev";
-                    Logs.Warning($"[SDcpp] {modelType} works best with {minSteps}+ steps (current: {steps})");
-                    Logs.Info("[SDcpp] Results may be lower quality with fewer steps");
+                    Logs.Debug($"[SDcpp] {CurrentModelArchitecture} is distilled, {steps} steps should work fine");
+                }
+                else
+                {
+                    Logs.Warning($"[SDcpp] {CurrentModelArchitecture} works best with {recommendedMinSteps}+ steps (current: {steps})");
                 }
             }
         }
