@@ -35,7 +35,7 @@ public static class SDcppDownloadManager
     private const string GITHUB_RELEASES_LIST_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases?per_page=20";
 
     /// <summary>Known working release tag for fallback when API is unavailable</summary>
-    private const string FALLBACK_RELEASE_TAG = "master-1896b28";
+    private const string FALLBACK_RELEASE_TAG = "master-471-7010bb4";
 
     /// <summary>Version info file to track installed SD.cpp version</summary>
     private const string VERSION_INFO_FILE = "sdcpp_version.json";
@@ -445,6 +445,8 @@ public static class SDcppDownloadManager
             return null;
         }
 
+        Logs.Debug($"[SDcpp] Linux assets in release: {string.Join(", ", linuxAssets.Select(a => a[\"name\"]?.ToString()).Where(n => !string.IsNullOrEmpty(n)))}");
+
         if (normalizedDevice == "cuda")
         {
             string target = $"cuda{cudaVersion}";
@@ -458,11 +460,29 @@ public static class SDcppDownloadManager
                 Logs.Debug($"[SDcpp] Matched Linux CUDA asset by exact token '{target}'");
                 return best;
             }
-            return linuxAssets.FirstOrDefault(asset =>
+            best = linuxAssets.FirstOrDefault(asset =>
             {
                 string name = asset["name"]?.ToString();
                 return !string.IsNullOrEmpty(name) && name.Contains("cuda", StringComparison.OrdinalIgnoreCase);
             });
+
+            if (best is not null)
+            {
+                Logs.Debug("[SDcpp] Matched Linux CUDA asset by generic token 'cuda'");
+                return best;
+            }
+
+            Logs.Warning($"[SDcpp] No Linux CUDA asset found (requested cuda{cudaVersion}); falling back to Vulkan Linux build if available");
+            best = linuxAssets.FirstOrDefault(asset =>
+            {
+                string name = asset["name"]?.ToString();
+                return !string.IsNullOrEmpty(name) && name.Contains("vulkan", StringComparison.OrdinalIgnoreCase);
+            });
+            if (best is not null)
+            {
+                Logs.Warning("[SDcpp] Selected Linux Vulkan asset as fallback for CUDA request");
+                return best;
+            }
         }
 
         if (normalizedDevice == "vulkan")
