@@ -129,42 +129,106 @@ Access settings via `Server → Backends → SD.cpp Backend`
 
 ### Performance Parameters
 
-**SD.cpp Performance Group** (Advanced Settings):
+SwarmUI parameters are organized into standard Swarm groups (Sampling / Advanced Sampling / Advanced Video / Advanced Model Addons / Refine-Upscale / ControlNet), plus SD.cpp-specific groups (VRAM/Memory and Performance/Caching).
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| Memory Map Models | `true` | Faster loading, reduced RAM usage |
-| VAE Direct Convolution | `true` | Significantly faster VAE decoding |
-| Cache Mode | `auto` | Inference caching (cache-dit for Flux, ucache for SD/SDXL) |
-| Cache Preset | `fast` | Cache quality/speed (slow/medium/fast/ultra) |
+Below is the definitive list of SD.cpp-related parameters and what SD.cpp CLI arguments they emit.
 
-**Cache Modes:**
-- `auto` - Automatically selects best mode (recommended)
-- `cache-dit` - For Flux/DiT models (5-10x speedup)
-- `ucache` - For SD/SDXL/UNET models
-- `easycache` - Simple condition-level cache
-- `none` - Disable caching
+#### SD.cpp VRAM / Memory (Advanced)
 
-**Cache Presets** (only with cache-dit):
-- `ultra` - Maximum speed, slight quality trade-off
-- `fast` - Balanced speed/quality (recommended)
-- `medium` - Better quality, moderate speedup
-- `slow` - Best quality, minimal speedup
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| VAE Tiling | `--vae-tiling` | Reduces VRAM usage by decoding VAE in tiles (slower). |
+| VAE on CPU | `--vae-on-cpu` | Saves VRAM, much slower. |
+| CLIP on CPU | `--clip-on-cpu` | Saves VRAM, slower prompt encoding. |
+| Offload Model Weights to CPU | `--offload-to-cpu` | Keeps weights in RAM, loads into VRAM as needed. |
+| ControlNet on CPU | `--control-net-cpu` | Only affects jobs that use ControlNet. |
+| SD.cpp VAE Tile Size | `--vae-tile-size` | SD.cpp-specific format `XxY` (only relevant when VAE Tiling is enabled). |
+| SD.cpp VAE Relative Tile Size | `--vae-relative-tile-size` | SD.cpp-specific format `XxY` (overrides `--vae-tile-size`). |
+| SD.cpp VAE Tile Overlap | `--vae-tile-overlap` | Fractional overlap (default 0.5). |
+| Force SDXL VAE Conv Scale | `--force-sdxl-vae-conv-scale` | Only relevant for SDXL VAEs. |
 
-**SD.cpp Group** (Standard Settings):
+#### SD.cpp Performance / Caching (Advanced)
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| VAE Tiling | `true` | Reduce VRAM usage (recommended for <12GB VRAM) |
-| VAE on CPU | `false` | Offload VAE to CPU (if running out of VRAM) |
-| CLIP on CPU | `false` | Offload CLIP to CPU (if running out of VRAM) |
-| Flash Attention | `false` | Memory-efficient attention (may reduce quality slightly) |
-| SD.cpp Sampler | `euler` | Sampling method (euler for Flux, euler_a for SD/SDXL) |
-| SD.cpp Scheduler | `(empty)` | Scheduler type (discrete, karras, exponential, ays, gits) |
-| TAESD Preview Decoder | `(None)` | Fast preview decoder for live previews |
-| ESRGAN Upscale Model | `(None)` | Post-processing upscaler |
-| Upscale Repeats | `1` | Number of upscale passes |
-| Color Projection | `false` | Color correction for img2img consistency |
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| Memory Map Models | `--mmap` | Usually speeds up model load and reduces RAM usage. |
+| VAE Direct Convolution | `--vae-conv-direct` | Usually faster VAE decoding. |
+| Cache Mode | `--cache-mode` | `auto` selects a mode based on model architecture. |
+| Cache Preset | `--cache-preset` | Applies to `cache-dit`. |
+| Cache Option | `--cache-option` | Advanced free-form cache tuning string. |
+| SCM Mask | `--scm-mask` | Cache-dit step mask (comma-separated 0/1). |
+| SCM Policy | `--scm-policy` | `dynamic` (default) or `static`. |
+
+#### Sampling (Swarm group: Sampling)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| SD.cpp Sampler | `--sampling-method` | Euler recommended for Flux; euler_a typical for SD/SDXL. |
+| SD.cpp Scheduler | `--scheduler` | Leave empty to use SD.cpp default. |
+
+#### Advanced Sampling (Swarm group: Advanced Sampling)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| Flash Attention | `--diffusion-fa` | Performance/VRAM tradeoff depends on build/device. |
+| Diffusion Direct Convolution | `--diffusion-conv-direct` | Performance optimization; disable if unstable on your device. |
+| RNG | `--rng` | Random backend selection. |
+| Sampler RNG | `--sampler-rng` | If unset, follows `--rng`. |
+| Prediction Override | `--prediction` | Only change if model requires it. |
+| Eta | `--eta` | DDIM/TCD only. |
+| Custom Sigmas | `--sigmas` | Advanced override of sigma schedule. |
+| SLG Scale | `--slg-scale` | DiT models only; 0 disables. |
+| SLG Start | `--skip-layer-start` | Requires SLG enabled. |
+| SLG End | `--skip-layer-end` | Requires SLG enabled. |
+| SLG Skip Layers | `--skip-layers` | Requires SLG enabled. |
+| Timestep Shift | `--timestep-shift` | NitroFusion models only. |
+| Preview Method Override | `--preview` | Per-job override; backend setting still controls preview enable. |
+| Preview Interval | `--preview-interval` | Per-job override. |
+| Preview Noisy | `--preview-noisy` | Per-job override. |
+| TAESD Preview Only | `--taesd-preview-only` | Per-job override. |
+
+#### Refine / Upscale (Swarm group: Refine / Upscale)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| ESRGAN Upscale Model | `--upscale-model` | Enables ESRGAN post-upscaling. |
+| Upscale Repeats | `--upscale-repeats` | Number of ESRGAN passes. |
+
+#### ControlNet (Swarm group: ControlNet)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| ControlNet Model | `--control-net` | Only first ControlNet is used. |
+| ControlNet Image | `--control-image` | If missing, init image may be used as fallback. |
+| Control Strength | `--control-strength` | Strength for ControlNet conditioning. |
+| ControlNet Canny Preprocessor | `--canny` | Applies SD.cpp canny preprocessor to the control image. |
+
+#### Advanced Video (Swarm group: Advanced Video)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| Video FPS | `--fps` | Used for video generation. |
+| Video End Frame | `--end-img` | Required by some image-to-video workflows. |
+| Control Video Frames Directory | `--control-video` | Directory containing ordered frame images. |
+| Flow Shift | `--flow-shift` | Default 3.0 for Wan; can be overridden. |
+| MoE Boundary | `--moe-boundary` | Wan2.2 specific. |
+| VACE Strength | `--vace-strength` | Wan specific. |
+
+#### Advanced Model Addons (Swarm group: Advanced Model Addons)
+
+| Swarm Parameter | SD.cpp CLI Arg | Notes |
+|---|---|---|
+| TAESD Preview Decoder | `--taesd` | Select a TAESD model used for preview decoding. |
+| CLIP Vision Model | `--clip_vision` | Only needed for architectures that require it. |
+| LLM Vision Model | `--llm_vision` | Only needed for architectures that require it. |
+| Embeddings Directory | `--embd-dir` | Optional embeddings folder. |
+| Weight Type | `--type` | Overrides SD.cpp weight type selection. |
+| Tensor Type Rules | `--tensor-type-rules` | Advanced per-tensor type control. |
+| LoRA Apply Mode | `--lora-apply-mode` | Controls how SD.cpp applies LoRAs. |
+| PhotoMaker Model | `--photo-maker` | Enables PhotoMaker support when set. |
+| PhotoMaker ID Images Directory | `--pm-id-images-dir` | PhotoMaker input ID images folder. |
+| PhotoMaker ID Embed Path | `--pm-id-embed-path` | PhotoMaker v2 embed path. |
+| PhotoMaker Style Strength | `--pm-style-strength` | PhotoMaker strength. |
 
 ## Usage Tips
 ----------

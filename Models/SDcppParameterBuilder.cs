@@ -40,8 +40,14 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         // Add basic generation parameters
         AddBasicParameters(parameters, input, isFluxBased, isDistilled);
 
+        // Advanced sampling overrides
+        AddAdvancedSamplingParameters(parameters, input);
+
         // Add model and components based on architecture
         AddModelComponents(parameters, input, isFluxBased, isSD3Model, isZImageModel, isQwenImageModel, requiresQwenLLM);
+
+        // Model addon overrides (advanced component/path controls)
+        AddModelAddonOverrides(parameters, input);
 
         // Add image edit parameters if applicable
         if (isImageEditModel)
@@ -52,13 +58,19 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         // Add image parameters (init image, mask, controlnet)
         AddImageParameters(parameters, input, outputDir);
 
+        // VAE tiling extra controls
+        AddVRAMTilingExtras(parameters, input);
+
         // Add advanced parameters (TAESD, upscaling, color)
         AddAdvancedParameters(parameters, input);
+
+        // Preview overrides (per-job)
+        AddPreviewOverrides(parameters, input);
 
         // Add video parameters if applicable
         if (isVideoModel)
         {
-            AddVideoParameters(parameters, input);
+            AddVideoParameters(parameters, input, outputDir);
         }
 
         // Apply VRAM policy based on mode
@@ -243,6 +255,16 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["cache_option"] = cacheOptionRaw.Trim();
         }
 
+        if (SDcppExtension.SCMMaskParam is not null && input.TryGet(SDcppExtension.SCMMaskParam, out string scmMaskRaw) && !string.IsNullOrWhiteSpace(scmMaskRaw))
+        {
+            parameters["scm_mask"] = scmMaskRaw.Trim();
+        }
+
+        if (SDcppExtension.SCMPolicyParam is not null && input.TryGet(SDcppExtension.SCMPolicyParam, out string scmPolicyRaw) && !string.IsNullOrWhiteSpace(scmPolicyRaw))
+        {
+            parameters["scm_policy"] = scmPolicyRaw.Trim();
+        }
+
         // Performance optimizations
         if (SDcppExtension.FlashAttentionParam is not null)
         {
@@ -263,6 +285,50 @@ public class SDcppParameterBuilder(string modelName, string architecture)
 
         // Note: VRAM offload flags (vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu)
         // are now handled dynamically by ApplyVramPolicy() which runs after model paths are known.
+    }
+
+    public void AddAdvancedSamplingParameters(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (SDcppExtension.RNGParam is not null && input.TryGet(SDcppExtension.RNGParam, out string rng) && !string.IsNullOrWhiteSpace(rng))
+        {
+            parameters["rng"] = rng.Trim();
+        }
+        if (SDcppExtension.SamplerRNGParam is not null && input.TryGet(SDcppExtension.SamplerRNGParam, out string samplerRng) && !string.IsNullOrWhiteSpace(samplerRng))
+        {
+            parameters["sampler_rng"] = samplerRng.Trim();
+        }
+        if (SDcppExtension.PredictionParam is not null && input.TryGet(SDcppExtension.PredictionParam, out string prediction) && !string.IsNullOrWhiteSpace(prediction))
+        {
+            parameters["prediction"] = prediction.Trim();
+        }
+        if (SDcppExtension.EtaParam is not null && input.TryGet(SDcppExtension.EtaParam, out double eta) && eta != 0)
+        {
+            parameters["eta"] = eta;
+        }
+        if (SDcppExtension.SigmasParam is not null && input.TryGet(SDcppExtension.SigmasParam, out string sigmas) && !string.IsNullOrWhiteSpace(sigmas))
+        {
+            parameters["sigmas"] = sigmas.Trim();
+        }
+        if (SDcppExtension.SLGScaleParam is not null && input.TryGet(SDcppExtension.SLGScaleParam, out double slgScale) && slgScale != 0)
+        {
+            parameters["slg_scale"] = slgScale;
+            if (SDcppExtension.SkipLayerStartParam is not null && input.TryGet(SDcppExtension.SkipLayerStartParam, out double slgStart))
+            {
+                parameters["skip_layer_start"] = slgStart;
+            }
+            if (SDcppExtension.SkipLayerEndParam is not null && input.TryGet(SDcppExtension.SkipLayerEndParam, out double slgEnd))
+            {
+                parameters["skip_layer_end"] = slgEnd;
+            }
+            if (SDcppExtension.SkipLayersParam is not null && input.TryGet(SDcppExtension.SkipLayersParam, out string skipLayers) && !string.IsNullOrWhiteSpace(skipLayers))
+            {
+                parameters["skip_layers"] = skipLayers.Trim();
+            }
+        }
+        if (SDcppExtension.TimestepShiftParam is not null && input.TryGet(SDcppExtension.TimestepShiftParam, out int timestepShift) && timestepShift != 0)
+        {
+            parameters["timestep_shift"] = timestepShift;
+        }
     }
 
     public void AddBasicParameters(Dictionary<string, object> parameters, T2IParamInput input, bool isFluxBased, bool isDistilled)
@@ -681,6 +747,12 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             File.WriteAllBytes(maskImagePath, maskImage.RawData);
             parameters["mask"] = maskImagePath;
         }
+
+        if (SDcppExtension.CannyPreprocessorParam is not null && input.TryGet(SDcppExtension.CannyPreprocessorParam, out bool canny) && canny)
+        {
+            parameters["canny"] = true;
+        }
+
         for (int i = 0; i < T2IParamTypes.Controlnets.Length; i++)
         {
             T2IParamTypes.ControlNetParamHolder cn = T2IParamTypes.Controlnets[i];
@@ -739,17 +811,29 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
     }
 
-    public void AddVideoParameters(Dictionary<string, object> parameters, T2IParamInput input)
+    public void AddVideoParameters(Dictionary<string, object> parameters, T2IParamInput input, string outputDir)
     {
         if (input.TryGet(T2IParamTypes.VideoFrames, out int videoFrames) && videoFrames > 0)
         {
             parameters["video_frames"] = videoFrames;
             Logs.Debug($"[SDcpp] Video frames: {videoFrames}");
         }
+        if (input.TryGet(T2IParamTypes.VideoEndFrame, out Image endFrame) && endFrame is not null)
+        {
+            string endFramePath = Path.Combine(outputDir, "end.png");
+            File.WriteAllBytes(endFramePath, endFrame.RawData);
+            parameters["end_img"] = endFramePath;
+            Logs.Debug("[SDcpp] Video end frame provided");
+        }
         if (architecture.Contains("wan"))
         {
-            parameters["flow_shift"] = 3.0;
-            Logs.Debug("[SDcpp] Flow shift: 3.0 (Wan model default)");
+            double flowShift = 3.0;
+            if (SDcppExtension.FlowShiftParam is not null && input.TryGet(SDcppExtension.FlowShiftParam, out double userFlowShift))
+            {
+                flowShift = userFlowShift;
+            }
+            parameters["flow_shift"] = flowShift;
+            Logs.Debug($"[SDcpp] Flow shift: {flowShift} (Wan model default)");
         }
         if (input.TryGet(T2IParamTypes.VideoFPS, out int videoFPS) && videoFPS > 0)
         {
@@ -767,6 +851,105 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                     parameters["video_swap_percent"] = swapPercent;
                     Logs.Debug($"[SDcpp] Video swap percent: {swapPercent}");
                 }
+            }
+
+            if (SDcppExtension.MoeBoundaryParam is not null && input.TryGet(SDcppExtension.MoeBoundaryParam, out double moeBoundary))
+            {
+                parameters["moe_boundary"] = moeBoundary;
+            }
+            if (SDcppExtension.VaceStrengthParam is not null && input.TryGet(SDcppExtension.VaceStrengthParam, out double vaceStrength) && vaceStrength != 0)
+            {
+                parameters["vace_strength"] = vaceStrength;
+            }
+        }
+
+        if (SDcppExtension.ControlVideoFramesDirParam is not null && input.TryGet(SDcppExtension.ControlVideoFramesDirParam, out string controlVideoDir) && !string.IsNullOrWhiteSpace(controlVideoDir))
+        {
+            parameters["control_video"] = controlVideoDir.Trim();
+        }
+    }
+
+    public void AddModelAddonOverrides(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (input.TryGet(T2IParamTypes.ClipVisionModel, out T2IModel clipVisionModel) && clipVisionModel is not null && !string.IsNullOrWhiteSpace(clipVisionModel.RawFilePath))
+        {
+            parameters["clip_vision"] = clipVisionModel.RawFilePath;
+        }
+        if (SDcppExtension.LlmVisionModelParam is not null && input.TryGet(SDcppExtension.LlmVisionModelParam, out T2IModel llmVisionModel) && llmVisionModel is not null && !string.IsNullOrWhiteSpace(llmVisionModel.RawFilePath))
+        {
+            parameters["llm_vision"] = llmVisionModel.RawFilePath;
+        }
+        if (SDcppExtension.EmbeddingsDirParam is not null && input.TryGet(SDcppExtension.EmbeddingsDirParam, out string embdDir) && !string.IsNullOrWhiteSpace(embdDir))
+        {
+            parameters["embd_dir"] = embdDir.Trim();
+        }
+        if (SDcppExtension.TensorTypeParam is not null && input.TryGet(SDcppExtension.TensorTypeParam, out string weightType) && !string.IsNullOrWhiteSpace(weightType))
+        {
+            parameters["type"] = weightType.Trim();
+        }
+        if (SDcppExtension.TensorTypeRulesParam is not null && input.TryGet(SDcppExtension.TensorTypeRulesParam, out string tensorRules) && !string.IsNullOrWhiteSpace(tensorRules))
+        {
+            parameters["tensor_type_rules"] = tensorRules.Trim();
+        }
+        if (SDcppExtension.LoraApplyModeParam is not null && input.TryGet(SDcppExtension.LoraApplyModeParam, out string loraApplyMode) && !string.IsNullOrWhiteSpace(loraApplyMode) && !loraApplyMode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            parameters["lora_apply_mode"] = loraApplyMode.Trim();
+        }
+
+        if (SDcppExtension.PhotoMakerModelParam is not null && input.TryGet(SDcppExtension.PhotoMakerModelParam, out T2IModel photoMakerModel) && photoMakerModel is not null && !string.IsNullOrWhiteSpace(photoMakerModel.RawFilePath))
+        {
+            parameters["photo_maker"] = photoMakerModel.RawFilePath;
+            if (SDcppExtension.PhotoMakerIdImagesDirParam is not null && input.TryGet(SDcppExtension.PhotoMakerIdImagesDirParam, out string pmIdDir) && !string.IsNullOrWhiteSpace(pmIdDir))
+            {
+                parameters["pm_id_images_dir"] = pmIdDir.Trim();
+            }
+            if (SDcppExtension.PhotoMakerIdEmbedPathParam is not null && input.TryGet(SDcppExtension.PhotoMakerIdEmbedPathParam, out string pmEmbedPath) && !string.IsNullOrWhiteSpace(pmEmbedPath))
+            {
+                parameters["pm_id_embed_path"] = pmEmbedPath.Trim();
+            }
+            if (SDcppExtension.PhotoMakerStyleStrengthParam is not null && input.TryGet(SDcppExtension.PhotoMakerStyleStrengthParam, out double pmStyleStrength) && pmStyleStrength != 0)
+            {
+                parameters["pm_style_strength"] = pmStyleStrength;
+            }
+        }
+    }
+
+    public void AddVRAMTilingExtras(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (SDcppExtension.VAETileSizeParam is not null && input.TryGet(SDcppExtension.VAETileSizeParam, out string tileSize) && !string.IsNullOrWhiteSpace(tileSize))
+        {
+            parameters["vae_tile_size"] = tileSize.Trim();
+        }
+        if (SDcppExtension.VAERelativeTileSizeParam is not null && input.TryGet(SDcppExtension.VAERelativeTileSizeParam, out string relTileSize) && !string.IsNullOrWhiteSpace(relTileSize))
+        {
+            parameters["vae_relative_tile_size"] = relTileSize.Trim();
+        }
+        if (SDcppExtension.VAETileOverlapParam is not null && input.TryGet(SDcppExtension.VAETileOverlapParam, out double overlap) && overlap != 0.5)
+        {
+            parameters["vae_tile_overlap"] = overlap;
+        }
+        if (SDcppExtension.ForceSDXLVAEConvScaleParam is not null && input.TryGet(SDcppExtension.ForceSDXLVAEConvScaleParam, out bool forceConvScale) && forceConvScale)
+        {
+            parameters["force_sdxl_vae_conv_scale"] = true;
+        }
+    }
+
+    public void AddPreviewOverrides(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (SDcppExtension.PreviewMethodOverrideParam is not null && input.TryGet(SDcppExtension.PreviewMethodOverrideParam, out string previewMethod) && !string.IsNullOrWhiteSpace(previewMethod))
+        {
+            parameters["preview_method"] = previewMethod.Trim();
+            if (SDcppExtension.PreviewIntervalParam is not null && input.TryGet(SDcppExtension.PreviewIntervalParam, out int previewInterval) && previewInterval > 0)
+            {
+                parameters["preview_interval"] = previewInterval;
+            }
+            if (SDcppExtension.PreviewNoisyParam is not null && input.TryGet(SDcppExtension.PreviewNoisyParam, out bool previewNoisy) && previewNoisy)
+            {
+                parameters["preview_noisy"] = true;
+            }
+            if (SDcppExtension.TAESDPreviewOnlyParam is not null && input.TryGet(SDcppExtension.TAESDPreviewOnlyParam, out bool taesdPreviewOnly) && taesdPreviewOnly)
+            {
+                parameters["taesd_preview_only"] = true;
             }
         }
     }

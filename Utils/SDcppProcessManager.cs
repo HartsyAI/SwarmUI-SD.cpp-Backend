@@ -207,12 +207,32 @@ public class SDcppProcessManager : IDisposable
         {
             if (PreviewArgsSupported)
             {
-                string previewMode = parameters.TryGetValue("preview_mode", out object pm) ? pm?.ToString() ?? "tae" : "tae";
+                // Per-job override: preview_method / preview_interval
+                string previewMode = parameters.TryGetValue("preview_method", out object pmOverride) && !string.IsNullOrWhiteSpace(pmOverride?.ToString())
+                    ? pmOverride.ToString()
+                    : (parameters.TryGetValue("preview_mode", out object pm) ? pm?.ToString() ?? "tae" : "tae");
                 args.Add($"--preview {previewMode}");
-                args.Add("--preview-interval 1");
+
+                int interval = 1;
+                if (parameters.TryGetValue("preview_interval", out object intervalObj) && int.TryParse(intervalObj?.ToString(), out int parsedInterval) && parsedInterval > 0)
+                {
+                    interval = parsedInterval;
+                }
+                args.Add($"--preview-interval {interval}");
+
                 if (parameters.TryGetValue("preview_path", out object previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
                 {
                     args.Add($"--preview-path \"{previewPath}\"");
+                }
+
+                if (parameters.TryGetValue("preview_noisy", out object previewNoisy) && previewNoisy is bool pn && pn)
+                {
+                    args.Add("--preview-noisy");
+                }
+
+                if (parameters.TryGetValue("taesd_preview_only", out object taesdPreviewOnly) && taesdPreviewOnly is bool tpo && tpo)
+                {
+                    args.Add("--taesd-preview-only");
                 }
             }
             else
@@ -242,6 +262,10 @@ public class SDcppProcessManager : IDisposable
                 args.Add("--type f16");
             }
         }
+        if (parameters.TryGetValue("type", out object weightType) && !string.IsNullOrEmpty(weightType?.ToString()))
+        {
+            args.Add($"--type {weightType}");
+        }
         if (parameters.ContainsKey("diffusion_model"))
         {
             if (parameters.TryGetValue("diffusion_model", out object diffusionModel) && !string.IsNullOrEmpty(diffusionModel.ToString())) args.Add($"--diffusion-model \"{diffusionModel}\"");
@@ -249,6 +273,7 @@ public class SDcppProcessManager : IDisposable
             if (parameters.TryGetValue("clip_l", out object clipL) && !string.IsNullOrEmpty(clipL.ToString())) args.Add($"--clip_l \"{clipL}\"");
             if (parameters.TryGetValue("t5xxl", out object t5xxl) && !string.IsNullOrEmpty(t5xxl.ToString())) args.Add($"--t5xxl \"{t5xxl}\"");
             if (parameters.TryGetValue("llm", out object llm) && !string.IsNullOrEmpty(llm.ToString())) args.Add($"--llm \"{llm}\"");
+            if (parameters.TryGetValue("llm_vision", out object llmVision) && !string.IsNullOrEmpty(llmVision.ToString())) args.Add($"--llm_vision \"{llmVision}\"");
             if (parameters.TryGetValue("vae", out object multiVae) && !string.IsNullOrEmpty(multiVae.ToString())) args.Add($"--vae \"{multiVae}\"");
         }
         else
@@ -256,6 +281,15 @@ public class SDcppProcessManager : IDisposable
             if (parameters.TryGetValue("model", out object model) && !string.IsNullOrEmpty(model.ToString())) args.Add($"--model \"{model}\"");
             if (parameters.TryGetValue("vae", out object vae) && !string.IsNullOrEmpty(vae.ToString())) args.Add($"--vae \"{vae}\"");
         }
+
+        if (parameters.TryGetValue("clip_vision", out object clipVision) && !string.IsNullOrEmpty(clipVision.ToString())) args.Add($"--clip_vision \"{clipVision}\"");
+        if (parameters.TryGetValue("embd_dir", out object embdDir) && !string.IsNullOrEmpty(embdDir.ToString())) args.Add($"--embd-dir \"{embdDir}\"");
+        if (parameters.TryGetValue("tensor_type_rules", out object tensorTypeRules) && !string.IsNullOrEmpty(tensorTypeRules.ToString())) args.Add($"--tensor-type-rules \"{tensorTypeRules}\"");
+        if (parameters.TryGetValue("lora_apply_mode", out object loraApplyMode) && !string.IsNullOrEmpty(loraApplyMode.ToString())) args.Add($"--lora-apply-mode {loraApplyMode}");
+        if (parameters.TryGetValue("photo_maker", out object photoMaker) && !string.IsNullOrEmpty(photoMaker.ToString())) args.Add($"--photo-maker \"{photoMaker}\"");
+        if (parameters.TryGetValue("pm_id_images_dir", out object pmIdImagesDir) && !string.IsNullOrEmpty(pmIdImagesDir.ToString())) args.Add($"--pm-id-images-dir \"{pmIdImagesDir}\"");
+        if (parameters.TryGetValue("pm_id_embed_path", out object pmIdEmbedPath) && !string.IsNullOrEmpty(pmIdEmbedPath.ToString())) args.Add($"--pm-id-embed-path \"{pmIdEmbedPath}\"");
+        if (parameters.TryGetValue("pm_style_strength", out object pmStyleStrength)) args.Add($"--pm-style-strength {pmStyleStrength}");
         if (parameters.TryGetValue("prompt", out object prompt)) args.Add($"--prompt \"{prompt}\"");
         if (parameters.TryGetValue("negative_prompt", out object negPrompt) && !string.IsNullOrEmpty(negPrompt.ToString())) args.Add($"--negative-prompt \"{negPrompt}\"");
         if (parameters.TryGetValue("width", out object width)) args.Add($"--width {width}");
@@ -267,6 +301,18 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("scheduler", out object scheduler)) args.Add($"--scheduler {scheduler}");
         if (parameters.TryGetValue("clip_skip", out object clipSkip)) args.Add($"--clip-skip {clipSkip}");
         if (parameters.TryGetValue("batch_count", out object batchCount)) args.Add($"--batch-count {batchCount}");
+
+        if (parameters.TryGetValue("rng", out object rng)) args.Add($"--rng {rng}");
+        if (parameters.TryGetValue("sampler_rng", out object samplerRng)) args.Add($"--sampler-rng {samplerRng}");
+        if (parameters.TryGetValue("prediction", out object prediction)) args.Add($"--prediction {prediction}");
+        if (parameters.TryGetValue("eta", out object eta)) args.Add($"--eta {eta}");
+        if (parameters.TryGetValue("sigmas", out object sigmas) && !string.IsNullOrEmpty(sigmas?.ToString())) args.Add($"--sigmas \"{sigmas}\"");
+
+        if (parameters.TryGetValue("slg_scale", out object slgScale)) args.Add($"--slg-scale {slgScale}");
+        if (parameters.TryGetValue("skip_layer_start", out object skipLayerStart)) args.Add($"--skip-layer-start {skipLayerStart}");
+        if (parameters.TryGetValue("skip_layer_end", out object skipLayerEnd)) args.Add($"--skip-layer-end {skipLayerEnd}");
+        if (parameters.TryGetValue("skip_layers", out object skipLayers) && !string.IsNullOrEmpty(skipLayers?.ToString())) args.Add($"--skip-layers \"{skipLayers}\"");
+        if (parameters.TryGetValue("timestep_shift", out object timestepShift)) args.Add($"--timestep-shift {timestepShift}");
         if (parameters.TryGetValue("output", out object output) && OutputArgSupported)
         {
             args.Add($"--output \"{output}\"");
@@ -278,6 +324,10 @@ public class SDcppProcessManager : IDisposable
             if (clipOnCpu) args.Add("--clip-on-cpu");
             if (controlNetOnCpu) args.Add("--control-net-cpu");
         }
+        if (parameters.TryGetValue("vae_tile_size", out object vaeTileSize) && !string.IsNullOrEmpty(vaeTileSize.ToString())) args.Add($"--vae-tile-size {vaeTileSize}");
+        if (parameters.TryGetValue("vae_relative_tile_size", out object vaeRelTileSize) && !string.IsNullOrEmpty(vaeRelTileSize.ToString())) args.Add($"--vae-relative-tile-size {vaeRelTileSize}");
+        if (parameters.TryGetValue("vae_tile_overlap", out object vaeTileOverlap)) args.Add($"--vae-tile-overlap {vaeTileOverlap}");
+        if (parameters.TryGetValue("force_sdxl_vae_conv_scale", out object forceConvScale) && forceConvScale is bool fcs && fcs) args.Add("--force-sdxl-vae-conv-scale");
         if (flashAttention) args.Add("--diffusion-fa");
         if (diffusionConvDirect) args.Add("--diffusion-conv-direct");
         if (offloadToCpu) args.Add("--offload-to-cpu");
@@ -294,12 +344,23 @@ public class SDcppProcessManager : IDisposable
             {
                 args.Add($"--cache-preset {cachePreset}");
             }
+            if (parameters.TryGetValue("scm_mask", out object scmMask) && !string.IsNullOrEmpty(scmMask.ToString()))
+            {
+                args.Add($"--scm-mask \"{scmMask}\"");
+            }
+            if (parameters.TryGetValue("scm_policy", out object scmPolicy) && !string.IsNullOrEmpty(scmPolicy.ToString()))
+            {
+                args.Add($"--scm-policy {scmPolicy}");
+            }
         }
+        if (parameters.TryGetValue("canny", out object canny) && canny is bool c && c) args.Add("--canny");
         if (parameters.TryGetValue("init_img", out object initImg) && !string.IsNullOrEmpty(initImg.ToString())) args.Add($"--init-img \"{initImg}\"");
+        if (parameters.TryGetValue("end_img", out object endImg) && !string.IsNullOrEmpty(endImg.ToString())) args.Add($"--end-img \"{endImg}\"");
         if (parameters.TryGetValue("strength", out object strength)) args.Add($"--strength {strength}");
         if (parameters.TryGetValue("mask", out object mask) && !string.IsNullOrEmpty(mask.ToString())) args.Add($"--mask \"{mask}\"");
         if (parameters.TryGetValue("control_net", out object controlNet) && !string.IsNullOrEmpty(controlNet.ToString())) args.Add($"--control-net \"{controlNet}\"");
         if (parameters.TryGetValue("control_image", out object controlImage) && !string.IsNullOrEmpty(controlImage.ToString())) args.Add($"--control-image \"{controlImage}\"");
+        if (parameters.TryGetValue("control_video", out object controlVideo) && !string.IsNullOrEmpty(controlVideo.ToString())) args.Add($"--control-video \"{controlVideo}\"");
         if (parameters.TryGetValue("control_strength", out object controlStrength)) args.Add($"--control-strength {controlStrength}");
         if (parameters.TryGetValue("guidance", out object guidance)) args.Add($"--guidance {guidance}");
         if (parameters.TryGetValue("taesd", out object taesd) && !string.IsNullOrEmpty(taesd.ToString())) args.Add($"--taesd \"{taesd}\"");
@@ -313,6 +374,8 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("fps", out object videoFPS)) args.Add($"--fps {videoFPS}");
         if (parameters.TryGetValue("flow_shift", out object flowShift)) args.Add($"--flow-shift {flowShift}");
         if (parameters.TryGetValue("high_noise_diffusion_model", out object highNoiseModel) && !string.IsNullOrEmpty(highNoiseModel.ToString())) args.Add($"--high-noise-diffusion-model \"{highNoiseModel}\"");
+        if (parameters.TryGetValue("moe_boundary", out object moeBoundary)) args.Add($"--moe-boundary {moeBoundary}");
+        if (parameters.TryGetValue("vace_strength", out object vaceStrength)) args.Add($"--vace-strength {vaceStrength}");
         if (parameters.TryGetValue("video_swap_percent", out object videoSwapPercent)) args.Add($"--video-swap-percent {videoSwapPercent}");
         if (parameters.TryGetValue("lora_model_dir", out object loraDir) && !string.IsNullOrEmpty(loraDir.ToString())) args.Add($"--lora-model-dir \"{loraDir}\"");
         if (Settings.DebugMode) args.Add("--verbose");
