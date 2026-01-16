@@ -35,7 +35,7 @@ public class SDcppBackend : AbstractT2IBackend
         public int Threads = 0;
 
         [ConfigComment("Maximum time to wait for image generation before timing out (in seconds).")]
-        public int ProcessTimeoutSeconds = 3600;
+        public int ProcessTimeoutSeconds = 600;
 
         [ConfigComment("Whether SD.cpp should automatically check for updates and download newer versions.")]
         [ManualSettingsOptions(Impl = null, Vals = ["true", "false"], ManualNames = ["Auto-Update", "Don't Update"])]
@@ -44,11 +44,25 @@ public class SDcppBackend : AbstractT2IBackend
         [ConfigComment("Enable debug logging to help troubleshoot issues.")]
         public bool DebugMode = false;
 
-        [SettingHidden]
-        internal string ExecutablePath = "";
+        [ConfigComment("Any extra arguments to pass to the SD.cpp CLI.\nThese are appended to the command line when running generations.")]
+        public string ExtraArgs = "";
+
+        [ConfigComment("Whether to enable live preview images during generation.\n'Disabled' shows no preview.\n'Enabled (fast latent2rgb)' shows fast but lower quality previews.\n'Enabled HD (slow TAESD)' shows higher quality previews but uses more VRAM.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["false", "true", "taesd"], ManualNames = ["Disabled", "Enabled (fast latent2rgb)", "Enabled HD (slow TAESD)"])]
+        public string EnablePreviews = "true";
+
+        [ConfigComment("Which GPU to use, if multiple are available.\nShould be a single number, like '0'.")]
+        public int GPU_ID = 0;
+
+        [ConfigComment("How many extra requests may queue up on this backend while one is processing.\n0 means only a single live gen, 1 means a live gen and an extra waiting.")]
+        public int OverQueue = 1;
+
+        [ConfigComment("VRAM management policy for automatic memory optimization.\n'Auto' intelligently applies offload flags based on model size and available VRAM.\n'Always Offload' forces all memory-saving flags on (slower but uses less VRAM).\n'Disabled' never auto-applies flags (you control everything via manual parameters).")]
+        [ManualSettingsOptions(Impl = null, Vals = ["auto", "offload", "disabled"], ManualNames = ["Auto (Recommended)", "Always Offload", "Disabled (Manual Control)"])]
+        public string VramPolicy = "auto";
 
         [SettingHidden]
-        internal string WorkingDirectory = "";
+        internal string ExecutablePath = "";
     }
 
     public SDcppBackendSettings Settings => SettingsRaw as SDcppBackendSettings;
@@ -89,6 +103,9 @@ public class SDcppBackend : AbstractT2IBackend
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
             AddLoadStatus("Starting SD.cpp backend initialization...");
+
+            // Set max usages based on OverQueue setting
+            MaxUsages = 1 + Settings.OverQueue;
 
             // Validate and configure device (fallback to CPU if needed)
             ValidateAndConfigureDevice();
@@ -155,9 +172,16 @@ public class SDcppBackend : AbstractT2IBackend
                     AddLoadStatus("No NVIDIA GPU detected. Falling back to CPU device.");
                     Settings.Device = "cpu";
                 }
+                else if (Settings.GPU_ID >= nvidiaInfo.Length)
+                {
+                    Logs.Warning($"[SDcpp] GPU_ID {Settings.GPU_ID} not available (only {nvidiaInfo.Length} GPUs found). Using GPU 0.");
+                    Settings.GPU_ID = 0;
+                    Logs.Info($"[SDcpp] Using CUDA on: {nvidiaInfo[0].GPUName} (driver {nvidiaInfo[0].DriverVersion})");
+                }
                 else
                 {
-                    Logs.Info($"[SDcpp] Using CUDA on: {nvidiaInfo[0].GPUName} (driver {nvidiaInfo[0].DriverVersion})");
+                    NvidiaUtil.NvidiaInfo selectedGpu = nvidiaInfo[Settings.GPU_ID];
+                    Logs.Info($"[SDcpp] Using CUDA on GPU {Settings.GPU_ID}: {selectedGpu.GPUName} (driver {selectedGpu.DriverVersion})");
                 }
             }
             else if (configured is "cpu" && nvidiaInfo is not null && nvidiaInfo.Length > 0)
@@ -319,13 +343,29 @@ public class SDcppBackend : AbstractT2IBackend
 
             try
             {
-                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture);
+                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture)
+                {
+                    VramPolicyMode = Settings.VramPolicy ?? "auto",
+                    GpuIndex = Settings.GPU_ID
+                };
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(user_input, tempDir);
-                // Enable TAESD preview support
+
+                // Configure preview based on backend settings
                 string previewPath = Path.Combine(tempDir, "preview.png");
-                parameters["enable_preview"] = true;
-                parameters["preview_path"] = previewPath;
-                Logs.Debug($"[SDcpp] Preview enabled. Path: {previewPath}");
+                bool previewEnabled = Settings.EnablePreviews is not "false";
+                parameters["enable_preview"] = previewEnabled;
+                if (previewEnabled)
+                {
+                    parameters["preview_path"] = previewPath;
+                    parameters["preview_mode"] = Settings.EnablePreviews == "taesd" ? "tae" : "proj";
+                    Logs.Debug($"[SDcpp] Preview enabled ({Settings.EnablePreviews}). Path: {previewPath}");
+                }
+
+                // Apply extra args if configured
+                if (!string.IsNullOrWhiteSpace(Settings.ExtraArgs))
+                {
+                    parameters["extra_args"] = Settings.ExtraArgs.Trim();
+                }
 
                 long startTime = Environment.TickCount64;
                 int lastStep = 0;
@@ -393,7 +433,11 @@ public class SDcppBackend : AbstractT2IBackend
             Directory.CreateDirectory(tempDir);
             try
             {
-                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture);
+                SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture)
+                {
+                    VramPolicyMode = Settings.VramPolicy ?? "auto",
+                    GpuIndex = Settings.GPU_ID
+                };
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(input, tempDir);
                 (bool success, string output, string error) = await ProcessManager.ExecuteAsync(parameters, isFluxBased);
                 if (!success)

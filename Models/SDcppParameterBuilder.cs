@@ -13,6 +13,12 @@ namespace Hartsy.Extensions.SDcppExtension.Models;
 /// <summary>Converts SwarmUI generation parameters into SD.cpp CLI arguments format. Handles model paths, encoders, VAE, and all generation settings.</summary>
 public class SDcppParameterBuilder(string modelName, string architecture)
 {
+    /// <summary>VRAM policy mode: "auto", "offload", or "disabled".</summary>
+    public string VramPolicyMode { get; set; } = "auto";
+
+    /// <summary>GPU index to use for VRAM calculations.</summary>
+    public int GpuIndex { get; set; } = 0;
+
     /// <summary>Builds complete SD.cpp parameters dictionary from SwarmUI input.</summary>
     public Dictionary<string, object> BuildParameters(T2IParamInput input, string outputDir)
     {
@@ -55,7 +61,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             AddVideoParameters(parameters, input);
         }
 
-        // Apply dynamic VRAM policy (always runs, only adds flags when needed)
+        // Apply VRAM policy based on mode
         ApplyVramPolicy(parameters, input);
 
         // Set output path (video uses different format)
@@ -72,13 +78,37 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     }
 
     /// <summary>Applies dynamic VRAM policy based on actual model sizes and available GPU VRAM.
-    /// Always runs but only sets offload flags when needed to prevent OOM.</summary>
+    /// Behavior depends on VramPolicyMode: "auto" runs smart detection, "offload" forces all flags,
+    /// "disabled" skips automatic policy entirely.</summary>
     public void ApplyVramPolicy(Dictionary<string, object> parameters, T2IParamInput input)
     {
+        string mode = (VramPolicyMode ?? "auto").ToLowerInvariant();
+
+        // Disabled mode: skip all automatic VRAM policy, let user control via manual parameters
+        if (mode == "disabled")
+        {
+            Logs.Debug("[SDcpp VRAM] Policy disabled - skipping automatic VRAM optimization");
+            return;
+        }
+
+        // Offload mode: force all memory-saving flags on (ignore smart detection)
+        if (mode == "offload")
+        {
+            Logs.Debug("[SDcpp VRAM] Policy set to 'Always Offload' - enabling all memory-saving flags");
+            parameters["vae_tiling"] = true;
+            parameters["clip_on_cpu"] = true;
+            parameters["vae_on_cpu"] = true;
+            parameters["offload_to_cpu"] = true;
+            Logs.Info("[SDcpp VRAM] Applied flags: vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu (forced by policy)");
+            return;
+        }
+
+        // Auto mode: use smart VRAM policy based on actual model sizes
         // Extract model paths from parameters
         string diffusionPath = null;
-        List<string> encoderPaths = [];
+        Dictionary<string, string> encoderPaths = [];
         string vaePath = null;
+        string controlNetPath = null;
 
         if (parameters.TryGetValue("diffusion_model", out object diffObj))
         {
@@ -89,21 +119,22 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             diffusionPath = modelObj?.ToString();
         }
 
-        if (parameters.TryGetValue("clip_l", out object clipL))
+        // Build encoder paths dictionary with proper keys for VRAM savings calculation
+        if (parameters.TryGetValue("clip_l", out object clipL) && !string.IsNullOrEmpty(clipL?.ToString()))
         {
-            encoderPaths.Add(clipL?.ToString());
+            encoderPaths["clip_l"] = clipL.ToString();
         }
-        if (parameters.TryGetValue("clip_g", out object clipG))
+        if (parameters.TryGetValue("clip_g", out object clipG) && !string.IsNullOrEmpty(clipG?.ToString()))
         {
-            encoderPaths.Add(clipG?.ToString());
+            encoderPaths["clip_g"] = clipG.ToString();
         }
-        if (parameters.TryGetValue("t5xxl", out object t5))
+        if (parameters.TryGetValue("t5xxl", out object t5) && !string.IsNullOrEmpty(t5?.ToString()))
         {
-            encoderPaths.Add(t5?.ToString());
+            encoderPaths["t5xxl"] = t5.ToString();
         }
-        if (parameters.TryGetValue("llm", out object llm))
+        if (parameters.TryGetValue("llm", out object llm) && !string.IsNullOrEmpty(llm?.ToString()))
         {
-            encoderPaths.Add(llm?.ToString());
+            encoderPaths["llm"] = llm.ToString();
         }
 
         if (parameters.TryGetValue("vae", out object vaeObj))
@@ -111,12 +142,19 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             vaePath = vaeObj?.ToString();
         }
 
-        // Evaluate VRAM policy
+        if (parameters.TryGetValue("control_net", out object cnObj))
+        {
+            controlNetPath = cnObj?.ToString();
+        }
+
+        // Evaluate VRAM policy with detailed component information
         SDcppVramPolicy.PolicyResult policy = SDcppVramPolicy.Evaluate(
             input,
             diffusionPath,
-            encoderPaths.Where(p => !string.IsNullOrEmpty(p)),
-            vaePath
+            encoderPaths,
+            vaePath,
+            controlNetPath,
+            GpuIndex
         );
 
         // Apply policy to parameters (respects user overrides if they're more aggressive)

@@ -212,7 +212,9 @@ public class SDcppProcessManager : IDisposable
         {
             if (PreviewArgsSupported)
             {
-                args.Add("--preview tae");
+                // Use preview_mode parameter to select preview type (default: "tae")
+                string previewMode = parameters.TryGetValue("preview_mode", out object pm) ? pm?.ToString() ?? "tae" : "tae";
+                args.Add($"--preview {previewMode}");
                 args.Add("--preview-interval 1");
                 if (parameters.TryGetValue("preview_path", out object previewPath) && !string.IsNullOrEmpty(previewPath.ToString()))
                 {
@@ -227,6 +229,7 @@ public class SDcppProcessManager : IDisposable
         bool vaeTiling = parameters.TryGetValue("vae_tiling", out object vaeTilingRaw) && vaeTilingRaw is bool vaeTilingVal && vaeTilingVal;
         bool vaeOnCpu = parameters.TryGetValue("vae_on_cpu", out object vaeOnCpuRaw) && vaeOnCpuRaw is bool vaeOnCpuVal && vaeOnCpuVal;
         bool clipOnCpu = parameters.TryGetValue("clip_on_cpu", out object clipOnCpuRaw) && clipOnCpuRaw is bool clipOnCpuVal && clipOnCpuVal;
+        bool controlNetOnCpu = parameters.TryGetValue("control_net_cpu", out object controlNetCpuRaw) && controlNetCpuRaw is bool controlNetCpuVal && controlNetCpuVal;
         bool flashAttention = parameters.TryGetValue("flash_attention", out object flashAttnRaw) && flashAttnRaw is bool flashAttnVal && flashAttnVal;
         bool diffusionConvDirect = parameters.TryGetValue("diffusion_conv_direct", out object diffConvRaw) && diffConvRaw is bool diffConvVal && diffConvVal;
         bool offloadToCpu = parameters.TryGetValue("offload_to_cpu", out object offloadRaw) && offloadRaw is bool offloadVal && offloadVal;
@@ -279,6 +282,7 @@ public class SDcppProcessManager : IDisposable
             if (vaeTiling) args.Add("--vae-tiling");
             if (vaeOnCpu) args.Add("--vae-on-cpu");
             if (clipOnCpu) args.Add("--clip-on-cpu");
+            if (controlNetOnCpu) args.Add("--control-net-cpu");
         }
         if (flashAttention) args.Add("--diffusion-fa");
         if (diffusionConvDirect) args.Add("--diffusion-conv-direct");
@@ -319,6 +323,11 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("video_swap_percent", out object videoSwapPercent)) args.Add($"--video-swap-percent {videoSwapPercent}");
         if (parameters.TryGetValue("lora_model_dir", out object loraDir) && !string.IsNullOrEmpty(loraDir.ToString())) args.Add($"--lora-model-dir \"{loraDir}\"");
         if (Settings.DebugMode) args.Add("--verbose");
+        // Append any extra args from backend settings (at the end so they can override defaults)
+        if (parameters.TryGetValue("extra_args", out object extraArgs) && !string.IsNullOrWhiteSpace(extraArgs?.ToString()))
+        {
+            args.Add(extraArgs.ToString());
+        }
         return string.Join(" ", args);
     }
 
@@ -363,6 +372,7 @@ public class SDcppProcessManager : IDisposable
             if (Process is null) return (false, "", "Failed to start SD.cpp process");
             StringBuilder outputBuilder = new();
             StringBuilder errorBuilder = new();
+            bool logSdcpp = Logs.MinimumLevel <= Logs.LogLevel.Debug;
             Task outputTask = Task.Run(async () =>
             {
                 while (!Process.StandardOutput.EndOfStream)
@@ -371,7 +381,7 @@ public class SDcppProcessManager : IDisposable
                     if (line is not null)
                     {
                         outputBuilder.AppendLine(line);
-                        if (Settings.DebugMode) Logs.Debug($"[SDcpp] Output: {line}");
+                        if (logSdcpp) Logs.Debug($"[SDcpp] Output: {line}");
                     }
                 }
             });
@@ -383,7 +393,7 @@ public class SDcppProcessManager : IDisposable
                     if (line is not null)
                     {
                         errorBuilder.AppendLine(line);
-                        if (Settings.DebugMode) Logs.Debug($"[SDcpp] Error: {line}");
+                        if (logSdcpp) Logs.Debug($"[SDcpp] Error: {line}");
                     }
                 }
             });
