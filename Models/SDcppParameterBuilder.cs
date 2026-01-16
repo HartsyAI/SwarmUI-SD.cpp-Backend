@@ -301,10 +301,8 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 parameters["clip_skip"] = clipSkip;
             }
         }
-        if (input.TryGet(T2IParamTypes.Images, out int batchCount) && batchCount > 1)
-        {
-            parameters["batch_count"] = batchCount;
-        }
+        // NOTE: SwarmUI handles 'Images' and 'Batch Size' at a higher level by issuing multiple backend jobs.
+        // This backend should generate 1 image per job to preserve per-image previews and sequential behavior.
 
         // Flux guidance scale (applies to all Flux-based models)
         if (isFluxBased && input.TryGet(T2IParamTypes.FluxGuidanceScale, out double fluxGuidance))

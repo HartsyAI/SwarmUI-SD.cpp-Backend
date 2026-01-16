@@ -508,6 +508,24 @@ public class SDcppBackend : AbstractT2IBackend
             .. Directory.GetFiles(outputDir, "*.jpg"),
             .. Directory.GetFiles(outputDir, "*.jpeg")];
 
+        imageFiles = [.. imageFiles.Where(path =>
+        {
+            string fileName = Path.GetFileName(path);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return false;
+            }
+            if (fileName.Equals("preview.png", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            if (fileName.StartsWith("preview_", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            return true;
+        })];
+
         foreach (string imagePath in imageFiles)
         {
             try

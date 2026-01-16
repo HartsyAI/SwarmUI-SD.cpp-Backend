@@ -445,7 +445,7 @@ public static class SDcppDownloadManager
             return null;
         }
 
-        Logs.Debug($"[SDcpp] Linux assets in release: {string.Join(", ", linuxAssets.Select(a => a[\"name\"]?.ToString()).Where(n => !string.IsNullOrEmpty(n)))}");
+        Logs.Debug($"[SDcpp] Linux assets in release: {string.Join(", ", linuxAssets.Select(a => a["name"]?.ToString()).Where(n => !string.IsNullOrEmpty(n)))}");
 
         if (normalizedDevice == "cuda")
         {
