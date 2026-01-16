@@ -500,15 +500,21 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         else
         {
             T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
-            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m => m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("qwen", StringComparison.OrdinalIgnoreCase));
+            // Z-Image specifically requires Qwen 3 4B - other Qwen models (like qwen_2.5_vl) are NOT compatible
+            // Priority order: exact match for qwen_3_4b variants, then download if not found
+            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m =>
+                m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) ||
+                m.Name.Contains("qwen3_4b", StringComparison.OrdinalIgnoreCase) ||
+                m.Name.Contains("qwen-3-4b", StringComparison.OrdinalIgnoreCase));
+
             if (existingQwen is not null)
             {
                 parameters["llm"] = existingQwen.RawFilePath;
-                Logs.Debug($"[SDcpp] Using existing Qwen model: {existingQwen.Name}");
+                Logs.Debug($"[SDcpp] Using existing Qwen 3 4B model: {existingQwen.Name}");
             }
             else
             {
-                Logs.Info("[SDcpp] Z-Image requires Qwen model, auto-downloading...");
+                Logs.Info("[SDcpp] Z-Image requires Qwen 3 4B model (other Qwen versions are not compatible), auto-downloading...");
                 string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b.safetensors", "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
                     "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
                 if (!string.IsNullOrEmpty(qwenPath))

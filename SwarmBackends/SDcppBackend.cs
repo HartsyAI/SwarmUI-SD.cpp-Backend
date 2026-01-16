@@ -385,8 +385,6 @@ public class SDcppBackend : AbstractT2IBackend
 
                             Logs.Debug($"[SDcpp] Progress update: step={currentStep}/{totalSteps}, progress={progress:0.000}");
                             SendProgressUpdate(batchId, user_input, takeOutput, previewPath, progress);
-                            Logs.Debug($"[SDcpp] Preview file exists: {File.Exists(previewPath)}");
-                            Logs.Debug($"[SDcpp] Preview file size: {new FileInfo(previewPath).Length} bytes");
                         }
                     });
 
