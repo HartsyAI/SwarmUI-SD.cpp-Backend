@@ -21,9 +21,7 @@ public class SDcppProcessManager : IDisposable
     {
         Settings = settings;
         string exeDir = string.IsNullOrEmpty(settings.ExecutablePath) ? null : Path.GetDirectoryName(settings.ExecutablePath);
-        WorkingDirectory = string.IsNullOrEmpty(settings.WorkingDirectory)
-            ? (string.IsNullOrEmpty(exeDir) ? Path.GetTempPath() : exeDir)
-            : settings.WorkingDirectory;
+        WorkingDirectory = string.IsNullOrEmpty(exeDir) ? Path.GetTempPath() : exeDir;
         Directory.CreateDirectory(WorkingDirectory);
     }
 
