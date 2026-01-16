@@ -1,7 +1,6 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
 using System.IO;
-using System.Text;
 using System.Runtime.InteropServices;
 using static Hartsy.Extensions.SDcppExtension.SwarmBackends.SDcppBackend;
 
@@ -196,8 +195,6 @@ public class SDcppProcessManager : IDisposable
         }
     }
 
-    // CUDA runtime messaging removed (we now rely on runtime errors to surface issues)
-
     /// <summary>Constructs SD.cpp command-line arguments from generation parameters. Handles model paths, generation settings, memory optimization flags, and input images. Supports both standard SD models and Flux models with their multi-component architecture.</summary>
     /// <param name="parameters">Dictionary containing generation parameters like prompt, model, dimensions, etc.</param>
     /// <param name="isFluxModel">Whether this is a Flux model (uses different parameter names)</param>
@@ -210,7 +207,6 @@ public class SDcppProcessManager : IDisposable
         {
             if (PreviewArgsSupported)
             {
-                // Use preview_mode parameter to select preview type (default: "tae")
                 string previewMode = parameters.TryGetValue("preview_mode", out object pm) ? pm?.ToString() ?? "tae" : "tae";
                 args.Add($"--preview {previewMode}");
                 args.Add("--preview-interval 1");
@@ -522,13 +518,6 @@ public class SDcppProcessManager : IDisposable
         }
     }
 
-    /// <summary>Determines if the SD.cpp process is currently active and has not exited. Used to check process state before attempting operations or cleanup.</summary>
-    /// <returns>True if process exists and is running, false if null or has exited</returns>
-    public bool IsProcessRunning()
-    {
-        return Process is not null && !Process.HasExited;
-    }
-
     /// <summary>Forcibly terminates the SD.cpp process if it's currently running. Used for cleanup during shutdown or when a process needs to be cancelled. Waits up to 5 seconds for graceful exit before forcing termination.</summary>
     public void KillProcess()
     {
@@ -554,12 +543,7 @@ public class SDcppProcessManager : IDisposable
             KillProcess();
             Process?.Dispose();
             Disposed = true;
+            GC.SuppressFinalize(this);
         }
     }
-}
-
-public class VersionDir
-{
-    public string Path { get; set; }
-    public string Version { get; set; }
 }
