@@ -611,17 +611,6 @@ public class SDcppBackend : AbstractT2IBackend
     /// <inheritdoc/>
     public override bool IsValidForThisBackend(T2IParamInput input)
     {
-        // Reject requests with unsupported features
-        foreach (T2IParamTypes.ControlNetParamHolder controlnet in T2IParamTypes.Controlnets)
-        {
-            if (input.TryGet(controlnet.Model, out T2IModel controlnetModel) &&
-                controlnetModel is not null && controlnetModel.Name is not "(none)")
-            {
-                Logs.Verbose("[SDcpp] Rejecting request: ControlNet not currently supported");
-                return false;
-            }
-        }
-
         if (input.TryGet(T2IParamTypes.RefinerMethod, out string refinerMethod) &&
             !string.IsNullOrEmpty(refinerMethod) && refinerMethod is not "none")
         {

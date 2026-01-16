@@ -189,6 +189,16 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["vae_on_cpu"] = userVaeOnCpu;
         }
 
+        if (SDcppExtension.OffloadToCPUParam is not null)
+        {
+            parameters["offload_to_cpu"] = input.Get(SDcppExtension.OffloadToCPUParam, false, autoFixDefault: true);
+        }
+
+        if (SDcppExtension.ControlNetOnCPUParam is not null)
+        {
+            parameters["control_net_cpu"] = input.Get(SDcppExtension.ControlNetOnCPUParam, false, autoFixDefault: true);
+        }
+
         // Architecture-specific caching for performance
         bool isFluxBased = SDcppModelManager.IsFluxBased(architecture);
         bool isSD3 = architecture is "sd3" or "sd3.5";
@@ -197,20 +207,59 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         bool isUNet = !isDiT;
         string sampler = input.Get(SDcppExtension.SamplerParam, isFluxBased ? "euler" : "euler_a", autoFixDefault: true);
 
-        if (isUNet)
+        bool cacheModeOverridden = false;
+        if (SDcppExtension.CacheModeParam is not null && input.TryGet(SDcppExtension.CacheModeParam, out string cacheModeRaw) && !string.IsNullOrWhiteSpace(cacheModeRaw))
         {
-            parameters["cache_mode"] = "ucache";
-            parameters["cache_option"] = sampler == "euler_a" ? "reset=0" : "reset=1";
+            string cacheMode = cacheModeRaw.Trim();
+            if (!cacheMode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            {
+                parameters["cache_mode"] = cacheMode;
+                cacheModeOverridden = true;
+            }
         }
-        else if (isDiT)
+
+        // Auto caching behavior (only if user didn't override cache mode)
+        if (!cacheModeOverridden)
         {
-            parameters["cache_mode"] = "cache-dit";
-            parameters["cache_preset"] = "ultra";
+            if (isUNet)
+            {
+                parameters["cache_mode"] = "ucache";
+                parameters["cache_option"] = sampler == "euler_a" ? "reset=0" : "reset=1";
+            }
+            else if (isDiT)
+            {
+                parameters["cache_mode"] = "cache-dit";
+                parameters["cache_preset"] = "ultra";
+            }
+        }
+
+        if (SDcppExtension.CachePresetParam is not null && input.TryGet(SDcppExtension.CachePresetParam, out string cachePresetRaw) && !string.IsNullOrWhiteSpace(cachePresetRaw))
+        {
+            parameters["cache_preset"] = cachePresetRaw.Trim();
+        }
+
+        if (SDcppExtension.CacheOptionParam is not null && input.TryGet(SDcppExtension.CacheOptionParam, out string cacheOptionRaw) && !string.IsNullOrWhiteSpace(cacheOptionRaw))
+        {
+            parameters["cache_option"] = cacheOptionRaw.Trim();
         }
 
         // Performance optimizations
-        parameters["flash_attention"] = true;
-        parameters["diffusion_conv_direct"] = true;
+        if (SDcppExtension.FlashAttentionParam is not null)
+        {
+            parameters["flash_attention"] = input.Get(SDcppExtension.FlashAttentionParam, true, autoFixDefault: true);
+        }
+        else
+        {
+            parameters["flash_attention"] = true;
+        }
+        if (SDcppExtension.DiffusionConvDirectParam is not null)
+        {
+            parameters["diffusion_conv_direct"] = input.Get(SDcppExtension.DiffusionConvDirectParam, true, autoFixDefault: true);
+        }
+        else
+        {
+            parameters["diffusion_conv_direct"] = true;
+        }
 
         // Note: VRAM offload flags (vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu)
         // are now handled dynamically by ApplyVramPolicy() which runs after model paths are known.
@@ -688,11 +737,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 Logs.Debug($"[SDcpp] Upscale repeats: {upscaleRepeats}");
             }
         }
-        if (SDcppExtension.ColorProjectionParam is not null && input.TryGet(SDcppExtension.ColorProjectionParam, out bool colorProjection) && colorProjection)
-        {
-            parameters["color"] = true;
-            Logs.Debug("[SDcpp] Color projection enabled");
-        }
     }
 
     public void AddVideoParameters(Dictionary<string, object> parameters, T2IParamInput input)
@@ -709,7 +753,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         if (input.TryGet(T2IParamTypes.VideoFPS, out int videoFPS) && videoFPS > 0)
         {
-            parameters["video_fps"] = videoFPS;
+            parameters["fps"] = videoFPS;
             Logs.Debug($"[SDcpp] Video FPS: {videoFPS}");
         }
         if (architecture is "wan-2.2")

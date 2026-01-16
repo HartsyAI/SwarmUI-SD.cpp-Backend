@@ -305,13 +305,12 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("taesd", out object taesd) && !string.IsNullOrEmpty(taesd.ToString())) args.Add($"--taesd \"{taesd}\"");
         if (parameters.TryGetValue("upscale_model", out object upscaleModel) && !string.IsNullOrEmpty(upscaleModel.ToString())) args.Add($"--upscale-model \"{upscaleModel}\"");
         if (parameters.TryGetValue("upscale_repeats", out object upscaleRepeats)) args.Add($"--upscale-repeats {upscaleRepeats}");
-        if (parameters.TryGetValue("color", out object color) && color.ToString().Equals("true", StringComparison.InvariantCultureIgnoreCase)) args.Add("--color");
         if (parameters.TryGetValue("video_frames", out object videoFrames))
         {
             args.Add("-M vid_gen");
             args.Add($"--video-frames {videoFrames}");
         }
-        if (parameters.TryGetValue("video_fps", out object videoFPS)) args.Add($"--video-fps {videoFPS}");
+        if (parameters.TryGetValue("fps", out object videoFPS)) args.Add($"--fps {videoFPS}");
         if (parameters.TryGetValue("flow_shift", out object flowShift)) args.Add($"--flow-shift {flowShift}");
         if (parameters.TryGetValue("high_noise_diffusion_model", out object highNoiseModel) && !string.IsNullOrEmpty(highNoiseModel.ToString())) args.Add($"--high-noise-diffusion-model \"{highNoiseModel}\"");
         if (parameters.TryGetValue("video_swap_percent", out object videoSwapPercent)) args.Add($"--video-swap-percent {videoSwapPercent}");
