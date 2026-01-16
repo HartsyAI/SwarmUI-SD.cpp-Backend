@@ -1,5 +1,6 @@
 using SwarmUI.Utils;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -29,6 +30,9 @@ public static class SDcppDownloadManager
 
     /// <summary>GitHub API endpoint for latest SD.cpp releases</summary>
     private const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
+
+    /// <summary>GitHub API endpoint for listing SD.cpp releases (newest-first)</summary>
+    private const string GITHUB_RELEASES_LIST_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases?per_page=20";
 
     /// <summary>Known working release tag for fallback when API is unavailable</summary>
     private const string FALLBACK_RELEASE_TAG = "master-1896b28";
@@ -150,16 +154,7 @@ public static class SDcppDownloadManager
         }
     }
 
-    /// <summary>Gets download information for the current platform from GitHub releases. Falls back to known working URLs if the API is unavailable.</summary>
-    /// <param name="deviceType">Device type (cpu, cuda, vulkan)</param>
-    /// <param name="cudaVersion">CUDA version (11 or 12), only used when deviceType is "cuda"</param>
-    public static async Task<DownloadInfo> GetDownloadInfo(string deviceType, string cudaVersion = "12")
-    {
-        (DownloadInfo info, _, _) = await GetDownloadInfoWithCache(deviceType, cudaVersion, null);
-        return info;
-    }
-
-    /// <summary>Gets download information for the current platform from GitHub releases with optional ETag caching.</summary>
+    /// <summary>Gets download information for the current platform from GitHub releases. Falls back to querying the GitHub /releases list and selecting the newest release asset matching the requested device/platform when /releases/latest fails or has no matching assets.</summary>
     /// <param name="deviceType">Device type (cpu, cuda, vulkan)</param>
     /// <param name="cudaVersion">CUDA version (11 or 12), only used when deviceType is "cuda"</param>
     /// <param name="etag">ETag from previous release query, if any</param>
@@ -168,7 +163,10 @@ public static class SDcppDownloadManager
     {
         try
         {
-            Logs.Info("[SDcpp] Fetching latest release from GitHub...");
+            deviceType = (deviceType ?? "cpu").ToLowerInvariant();
+            cudaVersion = (cudaVersion ?? "12").ToLowerInvariant();
+
+            Logs.Info($"[SDcpp] Fetching latest release from GitHub (device={deviceType}, cuda={cudaVersion})...");
             using HttpRequestMessage request = new(HttpMethod.Get, GITHUB_API_URL);
             request.Headers.Add("User-Agent", "SwarmUI-SDcpp-Extension");
             if (!string.IsNullOrEmpty(etag))
@@ -176,6 +174,7 @@ public static class SDcppDownloadManager
                 request.Headers.TryAddWithoutValidation("If-None-Match", etag);
             }
             using HttpResponseMessage responseMessage = await Utilities.UtilWebClient.SendAsync(request);
+            Logs.Debug($"[SDcpp] GitHub latest release HTTP status: {(int)responseMessage.StatusCode} {responseMessage.StatusCode}");
             if (responseMessage.StatusCode == System.Net.HttpStatusCode.NotModified)
             {
                 Logs.Debug("[SDcpp] GitHub release data unchanged (ETag match)");
@@ -191,55 +190,214 @@ public static class SDcppDownloadManager
                     Logs.Warning("[SDcpp] GitHub API rate limit exceeded, skipping update check");
                     return (null, false, etag);
                 }
+
+                Logs.Warning($"[SDcpp] GitHub latest release query forbidden (rate-limit remaining: {remaining ?? "unknown"}) - attempting fallback release list query");
+                (DownloadInfo forbiddenFallbackInfo, bool forbiddenFallbackNotModified, string forbiddenFallbackEtag) = await TrySelectFromReleasesList(deviceType, cudaVersion, etag);
+                if (forbiddenFallbackNotModified)
+                {
+                    return (null, true, etag);
+                }
+                if (forbiddenFallbackInfo is not null)
+                {
+                    return (forbiddenFallbackInfo, false, forbiddenFallbackEtag ?? etag);
+                }
+
+                Logs.Warning("[SDcpp] Fallback release list query did not yield a usable asset; using hardcoded fallback download info");
+                return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, etag);
             }
+
             responseMessage.EnsureSuccessStatusCode();
             string response = await responseMessage.Content.ReadAsStringAsync();
             string responseEtag = responseMessage.Headers.ETag?.Tag ?? etag;
+
             JObject releaseData = JObject.Parse(response);
             string tagName = releaseData["tag_name"]?.ToString();
             JArray assets = releaseData["assets"] as JArray;
             if (assets == null || assets.Count == 0)
             {
-                Logs.Warning("[SDcpp] No assets found in latest release, using fallback...");
+                Logs.Warning("[SDcpp] No assets found in latest release; attempting fallback release list query...");
+                (DownloadInfo listFallbackInfo, _, string listFallbackEtag) = await TrySelectFromReleasesList(deviceType, cudaVersion, responseEtag);
+                if (listFallbackInfo is not null)
+                {
+                    return (listFallbackInfo, false, listFallbackEtag ?? responseEtag);
+                }
+                Logs.Warning("[SDcpp] Fallback release list query did not yield a usable asset; using hardcoded fallback");
                 return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
             }
+
+            // Try to pick the right asset out of the latest release.
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
             {
                 JToken linuxAsset = FindLinuxAsset(assets, deviceType, cudaVersion);
                 if (linuxAsset != null)
                 {
-                    return (CreateDownloadInfoFromAsset(linuxAsset, tagName, responseEtag), false, responseEtag);
+                    DownloadInfo info = CreateDownloadInfoFromAsset(linuxAsset, tagName, responseEtag);
+                    Logs.Info($"[SDcpp] Selected SD.cpp asset from latest release: tag={info.TagName}, asset={info.FileName}");
+                    return (info, false, responseEtag);
                 }
-                Logs.Warning("[SDcpp] No matching Linux asset in latest release, using fallback...");
+
+                Logs.Warning("[SDcpp] No matching Linux asset in latest release; attempting fallback release list query...");
+                (DownloadInfo listFallbackInfo, _, string listFallbackEtag) = await TrySelectFromReleasesList(deviceType, cudaVersion, responseEtag);
+                if (listFallbackInfo is not null)
+                {
+                    return (listFallbackInfo, false, listFallbackEtag ?? responseEtag);
+                }
+                Logs.Warning("[SDcpp] No matching Linux asset found from release list; using hardcoded fallback");
                 return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
             }
 
             string assetPattern = GetPlatformAssetPattern(deviceType, cudaVersion);
             if (string.IsNullOrEmpty(assetPattern))
             {
-                Logs.Error("[SDcpp] Unsupported platform for automatic download.");
+                Logs.Warning("[SDcpp] Unsupported platform for automatic download (no asset pattern)");
                 return (null, false, responseEtag);
             }
+
             foreach (JToken asset in assets)
             {
                 string name = asset["name"]?.ToString();
                 if (name != null && name.Contains(assetPattern, StringComparison.OrdinalIgnoreCase))
                 {
-                    return (CreateDownloadInfoFromAsset(asset, tagName, responseEtag), false, responseEtag);
+                    DownloadInfo info = CreateDownloadInfoFromAsset(asset, tagName, responseEtag);
+                    Logs.Info($"[SDcpp] Selected SD.cpp asset from latest release: tag={info.TagName}, asset={info.FileName}");
+                    return (info, false, responseEtag);
                 }
             }
-            Logs.Warning($"[SDcpp] No matching asset for pattern '{assetPattern}', using fallback...");
+
+            Logs.Warning($"[SDcpp] No matching asset for pattern '{assetPattern}' in latest release; attempting fallback release list query...");
+            (DownloadInfo listFallbackInfo2, _, string listFallbackEtag2) = await TrySelectFromReleasesList(deviceType, cudaVersion, responseEtag);
+            if (listFallbackInfo2 is not null)
+            {
+                return (listFallbackInfo2, false, listFallbackEtag2 ?? responseEtag);
+            }
+            Logs.Warning("[SDcpp] No matching asset found from release list; using hardcoded fallback");
             return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, responseEtag);
         }
         catch (HttpRequestException ex)
         {
-            Logs.Warning($"[SDcpp] GitHub API request failed ({ex.Message}), using fallback URLs...");
+            Logs.Warning($"[SDcpp] GitHub latest-release API request failed ({ex.Message}), attempting fallback release list query...");
+            (DownloadInfo fallbackInfo, _, string fallbackEtag) = await TrySelectFromReleasesList((deviceType ?? "cpu").ToLowerInvariant(), (cudaVersion ?? "12").ToLowerInvariant(), etag);
+            if (fallbackInfo is not null)
+            {
+                return (fallbackInfo, false, fallbackEtag ?? etag);
+            }
+            Logs.Warning("[SDcpp] Fallback release list query failed; using hardcoded fallback URLs...");
             return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, etag);
         }
         catch (Exception ex)
         {
-            Logs.Warning($"[SDcpp] Error fetching release info ({ex.Message}), using fallback URLs...");
+            Logs.Warning($"[SDcpp] Error fetching latest release info ({ex.Message}), attempting fallback release list query...");
+            (DownloadInfo fallbackInfo, _, string fallbackEtag) = await TrySelectFromReleasesList((deviceType ?? "cpu").ToLowerInvariant(), (cudaVersion ?? "12").ToLowerInvariant(), etag);
+            if (fallbackInfo is not null)
+            {
+                return (fallbackInfo, false, fallbackEtag ?? etag);
+            }
+            Logs.Warning("[SDcpp] Fallback release list query failed; using hardcoded fallback URLs...");
             return (GetFallbackDownloadInfo(deviceType, cudaVersion), false, etag);
+        }
+    }
+
+    /// <summary>Gets download information for the current platform from GitHub releases.</summary>
+    /// <param name="deviceType">Device type (cpu, cuda, vulkan)</param>
+    /// <param name="cudaVersion">CUDA version (11 or 12), only used when deviceType is "cuda"</param>
+    public static async Task<DownloadInfo> GetDownloadInfo(string deviceType, string cudaVersion = "12")
+    {
+        (DownloadInfo info, _, _) = await GetDownloadInfoWithCache(deviceType, cudaVersion, null);
+        return info;
+    }
+
+    private static async Task<(DownloadInfo Info, bool NotModified, string ETag)> TrySelectFromReleasesList(string deviceType, string cudaVersion, string etag)
+    {
+        try
+        {
+            Logs.Info($"[SDcpp] Fetching release list from GitHub for fallback selection (device={deviceType}, cuda={cudaVersion})...");
+            using HttpRequestMessage request = new(HttpMethod.Get, GITHUB_RELEASES_LIST_URL);
+            request.Headers.Add("User-Agent", "SwarmUI-SDcpp-Extension");
+            if (!string.IsNullOrEmpty(etag))
+            {
+                request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+            }
+            using HttpResponseMessage responseMessage = await Utilities.UtilWebClient.SendAsync(request);
+            Logs.Debug($"[SDcpp] GitHub releases list HTTP status: {(int)responseMessage.StatusCode} {responseMessage.StatusCode}");
+            if (responseMessage.StatusCode == System.Net.HttpStatusCode.NotModified)
+            {
+                Logs.Debug("[SDcpp] GitHub release list data unchanged (ETag match)");
+                return (null, true, etag);
+            }
+            if (responseMessage.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                string remaining = responseMessage.Headers.TryGetValues("X-RateLimit-Remaining", out IEnumerable<string> values)
+                    ? values.FirstOrDefault()
+                    : null;
+                Logs.Warning($"[SDcpp] GitHub release list query forbidden (rate-limit remaining: {remaining ?? "unknown"})");
+                return (null, false, etag);
+            }
+            responseMessage.EnsureSuccessStatusCode();
+            string response = await responseMessage.Content.ReadAsStringAsync();
+            string responseEtag = responseMessage.Headers.ETag?.Tag ?? etag;
+            JArray releases = JArray.Parse(response);
+            if (releases is null || releases.Count == 0)
+            {
+                Logs.Warning("[SDcpp] GitHub releases list returned no releases");
+                return (null, false, responseEtag);
+            }
+
+            foreach (JToken rel in releases)
+            {
+                string tagName = rel["tag_name"]?.ToString();
+                if (string.IsNullOrEmpty(tagName))
+                {
+                    continue;
+                }
+
+                JArray assets = rel["assets"] as JArray;
+                if (assets is null || assets.Count == 0)
+                {
+                    Logs.Debug($"[SDcpp] Release '{tagName}' has no assets, skipping");
+                    continue;
+                }
+
+                JToken asset = null;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    asset = FindLinuxAsset(assets, deviceType, cudaVersion);
+                }
+                else
+                {
+                    string assetPattern = GetPlatformAssetPattern(deviceType, cudaVersion);
+                    if (string.IsNullOrEmpty(assetPattern))
+                    {
+                        Logs.Warning("[SDcpp] Unsupported platform for automatic download (no asset pattern)");
+                        return (null, false, responseEtag);
+                    }
+                    foreach (JToken a in assets)
+                    {
+                        string name = a["name"]?.ToString();
+                        if (!string.IsNullOrEmpty(name) && name.Contains(assetPattern, StringComparison.OrdinalIgnoreCase))
+                        {
+                            asset = a;
+                            break;
+                        }
+                    }
+                }
+
+                if (asset is not null)
+                {
+                    DownloadInfo info = CreateDownloadInfoFromAsset(asset, tagName, responseEtag);
+                    Logs.Info($"[SDcpp] Selected SD.cpp asset from release list: tag={info.TagName}, asset={info.FileName}");
+                    return (info, false, responseEtag);
+                }
+
+                Logs.Debug($"[SDcpp] Release '{tagName}' did not contain a matching asset for device={deviceType}, cuda={cudaVersion}");
+            }
+
+            Logs.Warning($"[SDcpp] No matching assets found in the newest {releases.Count} releases (device={deviceType}, cuda={cudaVersion})");
+            return (null, false, responseEtag);
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"[SDcpp] Error querying release list: {ex.Message}");
+            return (null, false, etag);
         }
     }
 
@@ -283,6 +441,7 @@ public static class SDcppDownloadManager
             })];
         if (!linuxAssets.Any())
         {
+            Logs.Debug("[SDcpp] No Linux assets found in release");
             return null;
         }
 
@@ -296,6 +455,7 @@ public static class SDcppDownloadManager
             });
             if (best is not null)
             {
+                Logs.Debug($"[SDcpp] Matched Linux CUDA asset by exact token '{target}'");
                 return best;
             }
             return linuxAssets.FirstOrDefault(asset =>
@@ -314,6 +474,7 @@ public static class SDcppDownloadManager
             });
             if (best is not null)
             {
+                Logs.Debug("[SDcpp] Matched Linux Vulkan asset");
                 return best;
             }
         }
