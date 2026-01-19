@@ -23,8 +23,8 @@ public class SDcppBackend : AbstractT2IBackend
     /// <summary>Backend configuration settings with automatic download and device selection</summary>
     public class SDcppBackendSettings : AutoConfiguration
     {
-        [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.\nNote: Flux models may not work reliably with Vulkan - use CUDA or CPU instead.")]
-        [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)"])]
+        [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.\n'GPU (Metal)' uses Apple Silicon / macOS Metal acceleration.\n'GPU (OpenCL)' uses OpenCL-capable devices (varies by platform/driver).\n'GPU (SYCL)' uses SYCL devices (commonly Intel GPUs; requires the relevant runtime).\nNote: Flux models may not work reliably with Vulkan - use CUDA or CPU instead.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan", "metal", "opencl", "sycl"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)", "GPU (Metal - Apple)", "GPU (OpenCL)", "GPU (SYCL)"])]
         public string Device = "cpu";
 
         [ConfigComment("CUDA version to use (only applies when Device is set to CUDA).\n'Auto' automatically detects your installed CUDA version and downloads the matching binary.\n'CUDA 11.x' for older NVIDIA drivers (driver 450+).\n'CUDA 12.x' for newer NVIDIA drivers (driver 525+).\nNote: If unsure, leave on Auto - it will select the best version for your system.")]
@@ -82,9 +82,7 @@ public class SDcppBackend : AbstractT2IBackend
     {
         get
         {
-            List<string> features = ["sdcpp", "txt2img", "img2img", "inpainting",
-                "negative_prompt", "batch_generation", "vae_tiling", "gguf"];
-
+            List<string> features = ["sdcpp", "txt2img", "img2img", "inpainting", "negative_prompt", "batch_generation", "vae_tiling", "gguf"];
             features.AddRange(SDcppModelManager.GetFeaturesForArchitecture(CurrentModelArchitecture));
             return features;
         }
@@ -103,33 +101,28 @@ public class SDcppBackend : AbstractT2IBackend
         {
             Logs.Info("[SDcpp] Initializing SD.cpp backend");
             AddLoadStatus("Starting SD.cpp backend initialization...");
-
-            // Set max usages based on OverQueue setting
             MaxUsages = 1 + Settings.OverQueue;
-
-            // Validate and configure device (fallback to CPU if needed)
             ValidateAndConfigureDevice();
-
-            // Ensure SD.cpp binary is available
             AddLoadStatus($"Checking for SD.cpp binary (device: {Settings.Device})...");
             bool autoUpdate = Settings.AutoUpdate?.ToLowerInvariant() == "true";
-            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(
-                Settings.ExecutablePath, Settings.Device, Settings.CudaVersion, autoUpdate);
-
+            string updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath, Settings.Device, Settings.CudaVersion, autoUpdate);
+            if (string.IsNullOrEmpty(updatedExecutablePath) && !string.Equals(Settings.Device, "cpu", StringComparison.OrdinalIgnoreCase))
+            {
+                Logs.Warning($"[SDcpp] Failed to download a prebuilt binary for device '{Settings.Device}'. {SDcppDownloadManager.BuildFromSourceMessage(Settings.Device)}");
+                Logs.Warning("[SDcpp] Falling back to CPU prebuilt binary...");
+                AddLoadStatus("Prebuilt binary not available for requested device. Falling back to CPU.");
+                Settings.Device = "cpu";
+                updatedExecutablePath = await SDcppDownloadManager.EnsureSDcppAvailable(Settings.ExecutablePath, Settings.Device, Settings.CudaVersion, autoUpdate);
+            }
             if (updatedExecutablePath != Settings.ExecutablePath)
             {
                 Settings.ExecutablePath = updatedExecutablePath;
                 AddLoadStatus($"SD.cpp binary configured: {Path.GetFileName(updatedExecutablePath)}");
             }
-
-            // Initialize process manager
             ProcessManager = new SDcppProcessManager(Settings);
-
-            // Validate runtime environment
             AddLoadStatus("Validating SD.cpp executable and runtime...");
             if (!ProcessManager.ValidateRuntime(out string runtimeError))
             {
-                // Try CUDA → CPU fallback if CUDA fails
                 if (TryFallbackToCPU(runtimeError))
                 {
                     AddLoadStatus("Using CPU device (CUDA runtime not available)");
@@ -142,10 +135,7 @@ public class SDcppBackend : AbstractT2IBackend
                     return;
                 }
             }
-
-            // Populate available models
             PopulateModelsDict();
-
             Status = BackendStatus.RUNNING;
             Logs.Info("[SDcpp] Backend initialized successfully");
         }
@@ -163,7 +153,27 @@ public class SDcppBackend : AbstractT2IBackend
         {
             string configured = (Settings.Device ?? "cpu").ToLowerInvariant();
             NvidiaUtil.NvidiaInfo[] nvidiaInfo = NvidiaUtil.QueryNvidia();
-
+            if (configured is "metal" && !System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                Logs.Warning("[SDcpp] Metal requested but this is not macOS. Falling back to CPU.");
+                AddLoadStatus("Metal is only supported on macOS. Falling back to CPU device.");
+                Settings.Device = "cpu";
+                configured = "cpu";
+            }
+            if (configured is "opencl" && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                Logs.Warning("[SDcpp] OpenCL requested on macOS. Falling back to Metal.");
+                AddLoadStatus("OpenCL is not supported on macOS in this backend. Switching to Metal.");
+                Settings.Device = "metal";
+                configured = "metal";
+            }
+            if (configured is "sycl" && System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX))
+            {
+                Logs.Warning("[SDcpp] SYCL requested on macOS. Falling back to Metal.");
+                AddLoadStatus("SYCL is not supported on macOS in this backend. Switching to Metal.");
+                Settings.Device = "metal";
+                configured = "metal";
+            }
             if (configured is "cuda")
             {
                 if (nvidiaInfo is null || nvidiaInfo.Length is 0)
@@ -197,35 +207,27 @@ public class SDcppBackend : AbstractT2IBackend
 
     public bool TryFallbackToCPU(string cudaError)
     {
-        if (!string.Equals(Settings.Device, "cuda", StringComparison.OrdinalIgnoreCase) ||
-            !cudaError.Contains("CUDA"))
+        if (!string.Equals(Settings.Device, "cuda", StringComparison.OrdinalIgnoreCase) || !cudaError.Contains("CUDA"))
         {
             return false;
         }
-
         Logs.Warning("[SDcpp] CUDA runtime validation failed. Attempting CPU fallback...");
         AddLoadStatus("CUDA runtime not found. Falling back to CPU device...");
-
         Settings.Device = "cpu";
         bool enableAutoUpdate = Settings.AutoUpdate?.ToLowerInvariant() is "true";
-
         Task<string> cpuTask = SDcppDownloadManager.EnsureSDcppAvailable("", "cpu", "auto", enableAutoUpdate);
         string cpuExecutablePath = cpuTask.Result;
-
         if (!string.IsNullOrEmpty(cpuExecutablePath) && File.Exists(cpuExecutablePath))
         {
             Settings.ExecutablePath = cpuExecutablePath;
             ProcessManager = new SDcppProcessManager(Settings);
-
             if (ProcessManager.ValidateRuntime(out string cpuRuntimeError))
             {
                 Logs.Info("[SDcpp] Successfully fell back to CPU device");
                 return true;
             }
-
             Logs.Error($"[SDcpp] CPU fallback also failed: {cpuRuntimeError}");
         }
-
         return false;
     }
 
@@ -243,33 +245,23 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             Models ??= new ConcurrentDictionary<string, List<string>>();
-
             if (Program.T2IModelSets is null)
             {
                 Logs.Debug("[SDcpp] Model sets not yet initialized");
                 return;
             }
-
             if (Program.T2IModelSets.TryGetValue("Stable-Diffusion", out T2IModelHandler sdModelSet))
             {
-                Models["Stable-Diffusion"] = [.. sdModelSet.Models.Values
-                    .Where(m => m is not null && SDcppModelManager.IsSupportedModel(m))
-                    .Select(m => m.Name)];
+                Models["Stable-Diffusion"] = [.. sdModelSet.Models.Values.Where(m => m is not null && SDcppModelManager.IsSupportedModel(m)).Select(m => m.Name)];
                 Logs.Debug($"[SDcpp] Found {Models["Stable-Diffusion"].Count} compatible models");
             }
-
             if (Program.T2IModelSets.TryGetValue("Lora", out T2IModelHandler loraModelSet))
             {
-                Models["LoRA"] = [.. loraModelSet.Models.Values
-                    .Where(m => m is not null)
-                    .Select(m => m.Name)];
+                Models["LoRA"] = [.. loraModelSet.Models.Values.Where(m => m is not null).Select(m => m.Name)];
             }
-
             if (Program.T2IModelSets.TryGetValue("VAE", out T2IModelHandler vaeModelSet))
             {
-                Models["VAE"] = [.. vaeModelSet.Models.Values
-                    .Where(m => m is not null && SDcppModelManager.IsSupportedVAE(m))
-                    .Select(m => m.Name)];
+                Models["VAE"] = [.. vaeModelSet.Models.Values.Where(m => m is not null && SDcppModelManager.IsSupportedVAE(m)).Select(m => m.Name)];
             }
         }
         catch (Exception ex)
@@ -297,16 +289,13 @@ public class SDcppBackend : AbstractT2IBackend
         try
         {
             Logs.Info($"[SDcpp] Loading model: {model.Name}");
-
             if (!File.Exists(model.RawFilePath))
             {
                 Logs.Error($"[SDcpp] Model file not found: {model.RawFilePath}");
                 return false;
             }
-
             CurrentModelArchitecture = SDcppModelManager.DetectArchitecture(model);
             CurrentModelName = model.Name;
-
             Logs.Info($"[SDcpp] Model loaded: {model.Name} (Architecture: {CurrentModelArchitecture})");
             return true;
         }
@@ -326,21 +315,16 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
-            if (ProcessManager is null)
-                throw new InvalidOperationException("Process manager not initialized");
-
+            if (ProcessManager is null) throw new InvalidOperationException("Process manager not initialized");
             Logs.Info("[SDcpp] Starting live generation");
             bool isFluxBased = SDcppModelManager.IsFluxBased(CurrentModelArchitecture);
-
             if (isFluxBased)
             {
                 ValidateFluxParameters(user_input);
             }
-
             string tempDir = Path.Combine(Path.GetTempPath(), "sdcpp_output", Guid.NewGuid().ToString());
             Directory.CreateDirectory(tempDir);
             Logs.Debug($"[SDcpp] Temp output directory: {tempDir}");
-
             try
             {
                 SDcppParameterBuilder paramBuilder = new(CurrentModelName, CurrentModelArchitecture)
@@ -349,8 +333,6 @@ public class SDcppBackend : AbstractT2IBackend
                     GpuIndex = Settings.GPU_ID
                 };
                 Dictionary<string, object> parameters = paramBuilder.BuildParameters(user_input, tempDir);
-
-                // Configure preview based on backend settings
                 string previewPath = Path.Combine(tempDir, "preview.png");
                 bool previewEnabled = Settings.EnablePreviews is not "false";
                 parameters["enable_preview"] = previewEnabled;
@@ -360,45 +342,34 @@ public class SDcppBackend : AbstractT2IBackend
                     parameters["preview_mode"] = Settings.EnablePreviews == "taesd" ? "tae" : "proj";
                     Logs.Debug($"[SDcpp] Preview enabled ({Settings.EnablePreviews}). Path: {previewPath}");
                 }
-
-                // Apply extra args if configured
                 if (!string.IsNullOrWhiteSpace(Settings.ExtraArgs))
                 {
                     parameters["extra_args"] = Settings.ExtraArgs.Trim();
                 }
-
                 long startTime = Environment.TickCount64;
                 int lastStep = 0;
                 DateTime lastPreviewCheck = DateTime.MinValue;
-
-                (bool success, string output, string error) = await ProcessManager.ExecuteWithProgressAsync(
-                    parameters, isFluxBased,
+                (bool success, string output, string error) = await ProcessManager.ExecuteWithProgressAsync(parameters, isFluxBased,
                     progress =>
                     {
                         int totalSteps = user_input.Get(T2IParamTypes.Steps, 20);
                         int currentStep = (int)(progress * totalSteps);
-
                         if (currentStep > lastStep || DateTime.Now - lastPreviewCheck > TimeSpan.FromMilliseconds(500))
                         {
                             lastStep = currentStep;
                             lastPreviewCheck = DateTime.Now;
-
                             Logs.Debug($"[SDcpp] Progress update: step={currentStep}/{totalSteps}, progress={progress:0.000}");
                             SendProgressUpdate(batchId, user_input, takeOutput, previewPath, progress);
                         }
                     });
-
                 long genTime = Environment.TickCount64 - startTime;
-
                 if (!success)
                 {
                     Logs.Error($"[SDcpp] Generation failed: {error}");
                     throw new Exception($"SD.cpp generation failed: {error}");
                 }
-
                 Image[] images = await CollectGeneratedImages(tempDir, user_input);
                 Logs.Info($"[SDcpp] Generated {images.Length} images in {genTime}ms");
-
                 foreach (Image img in images)
                 {
                     takeOutput(img);
@@ -471,7 +442,6 @@ public class SDcppBackend : AbstractT2IBackend
                 byte[] previewBytes = File.ReadAllBytes(previewPath);
                 string previewBase64 = Convert.ToBase64String(previewBytes);
                 Logs.Debug($"[SDcpp] Preview bytes read: {previewBytes.Length} bytes (progress={progress:0.000})");
-
                 takeOutput(new Newtonsoft.Json.Linq.JObject
                 {
                     ["batch_index"] = batchId,
@@ -484,13 +454,11 @@ public class SDcppBackend : AbstractT2IBackend
             catch (IOException)
             {
                 Logs.Debug($"[SDcpp] Preview file locked or unreadable: {previewPath}");
-                // File locked, skip this update
             }
         }
         else
         {
             Logs.Debug($"[SDcpp] Preview file missing at progress {progress:0.000}: {previewPath}");
-            // Send progress without preview
             takeOutput(new Newtonsoft.Json.Linq.JObject
             {
                 ["batch_index"] = batchId,
@@ -504,10 +472,7 @@ public class SDcppBackend : AbstractT2IBackend
     public static async Task<Image[]> CollectGeneratedImages(string outputDir, T2IParamInput input)
     {
         List<Image> images = [];
-        string[] imageFiles = [.. Directory.GetFiles(outputDir, "*.png"),
-            .. Directory.GetFiles(outputDir, "*.jpg"),
-            .. Directory.GetFiles(outputDir, "*.jpeg")];
-
+        string[] imageFiles = [.. Directory.GetFiles(outputDir, "*.png"), .. Directory.GetFiles(outputDir, "*.jpg"), .. Directory.GetFiles(outputDir, "*.jpeg")];
         imageFiles = [.. imageFiles.Where(path =>
         {
             string fileName = Path.GetFileName(path);
@@ -525,7 +490,6 @@ public class SDcppBackend : AbstractT2IBackend
             }
             return true;
         })];
-
         foreach (string imagePath in imageFiles)
         {
             try
@@ -545,12 +509,10 @@ public class SDcppBackend : AbstractT2IBackend
                 Logs.Warning($"[SDcpp] Failed to load image {imagePath}: {ex.Message}");
             }
         }
-
         if (images.Count is 0)
         {
             throw new Exception("No images were generated by SD.cpp");
         }
-
         return [.. images];
     }
 
@@ -558,8 +520,7 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
-            if (Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }
         catch (Exception ex)
         {
@@ -575,21 +536,17 @@ public class SDcppBackend : AbstractT2IBackend
     {
         try
         {
-            // Get recommended values for this architecture
             double recommendedCFG = SDcppModelManager.GetRecommendedCFG(CurrentModelArchitecture);
             int recommendedMinSteps = SDcppModelManager.GetRecommendedMinSteps(CurrentModelArchitecture);
             bool isDistilled = SDcppModelManager.IsDistilledModel(CurrentModelArchitecture);
-
             if (input.TryGet(T2IParamTypes.CFGScale, out double cfgScale) && Math.Abs(cfgScale - recommendedCFG) > 0.5)
             {
                 Logs.Warning($"[SDcpp] {CurrentModelArchitecture} works best with CFG scale ~{recommendedCFG} (current: {cfgScale})");
             }
-
             if (input.TryGet(T2IParamTypes.NegativePrompt, out string negPrompt) && !string.IsNullOrWhiteSpace(negPrompt))
             {
                 Logs.Debug($"[SDcpp] {CurrentModelArchitecture} does not benefit from negative prompts");
             }
-
             if (input.TryGet(T2IParamTypes.Steps, out int steps) && steps < recommendedMinSteps)
             {
                 if (isDistilled)
@@ -611,13 +568,11 @@ public class SDcppBackend : AbstractT2IBackend
     /// <inheritdoc/>
     public override bool IsValidForThisBackend(T2IParamInput input)
     {
-        if (input.TryGet(T2IParamTypes.RefinerMethod, out string refinerMethod) &&
-            !string.IsNullOrEmpty(refinerMethod) && refinerMethod is not "none")
+        if (input.TryGet(T2IParamTypes.RefinerMethod, out string refinerMethod) && !string.IsNullOrEmpty(refinerMethod) && refinerMethod is not "none")
         {
             Logs.Verbose("[SDcpp] Rejecting request: Refiner not supported");
             return false;
         }
-
         return true;
     }
 

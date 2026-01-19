@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using Newtonsoft.Json.Linq;
 
 namespace Hartsy.Extensions.SDcppExtension.Utils;
@@ -15,10 +16,16 @@ public static class SDcppDownloadManager
     public const string FALLBACK_RELEASE_TAG = "master-471-7010bb4";
     public const string VERSION_FILE = "sdcpp_version.json";
 
+    public static string BuildFromSourceMessage(string deviceType)
+    {
+        return $"No prebuilt SD.cpp binary is available for the requested device '{deviceType}' on this platform. If you want to use that backend, you will need to build stable-diffusion.cpp from source and configure the executable path manually.";
+    }
+
     /// <summary>Ensures SD.cpp binary is available, downloading if needed.</summary>
     public static async Task<string> EnsureSDcppAvailable(string currentPath, string deviceType, string cudaVersion, bool autoUpdate)
     {
         deviceType = (deviceType ?? "cpu").ToLowerInvariant();
+        deviceType = deviceType is "cpu" ? ResolveCpuDeviceType() : deviceType;
         string resolvedCuda = deviceType is "cuda" ? ResolveCudaVersion(cudaVersion) : null;
         string deviceDir = GetDeviceDirectory(deviceType, resolvedCuda);
         string versionPath = Path.Combine(deviceDir, VERSION_FILE);
@@ -30,6 +37,10 @@ public static class SDcppDownloadManager
         }
         if (executable is not null)
         {
+            if (!autoUpdate)
+            {
+                await WarnIfNotLatest(versionPath, deviceType, resolvedCuda);
+            }
             if (autoUpdate && await ShouldUpdate(versionPath, deviceType, resolvedCuda))
             {
                 string updated = await DownloadBinary(deviceType, resolvedCuda, deviceDir, versionPath);
@@ -52,7 +63,7 @@ public static class SDcppDownloadManager
         DownloadInfo info = await GetDownloadInfo(deviceType, cudaVersion);
         if (info is null)
         {
-            Logs.Error("[SDcpp] Could not determine download URL");
+            Logs.Warning($"[SDcpp] Could not determine download URL for device '{deviceType}'. {BuildFromSourceMessage(deviceType)}");
             return null;
         }
         string executable = await DownloadAndExtract(info, targetDir);
@@ -93,7 +104,9 @@ public static class SDcppDownloadManager
             JToken asset = FindMatchingAsset(assets, deviceType, cudaVersion);
             if (asset is null)
             {
-                Logs.Warning("[SDcpp] No matching asset found, using fallback");
+                string[] patterns = GetAssetPatterns(deviceType, cudaVersion);
+                string patternsText = patterns is null || patterns.Length == 0 ? "<none>" : string.Join(", ", patterns);
+                Logs.Warning($"[SDcpp] No matching prebuilt asset found in latest release for device '{deviceType}'. Patterns tried: {patternsText}");
                 return GetFallbackInfo(deviceType, cudaVersion);
             }
             return new DownloadInfo
@@ -108,6 +121,37 @@ public static class SDcppDownloadManager
         {
             Logs.Warning($"[SDcpp] GitHub API error: {ex.Message}, using fallback");
             return GetFallbackInfo(deviceType, cudaVersion);
+        }
+    }
+
+    public static async Task WarnIfNotLatest(string versionPath, string deviceType, string cudaVersion)
+    {
+        VersionInfo current = LoadVersionInfo(versionPath);
+        if (current is null)
+        {
+            return;
+        }
+        if (DateTime.UtcNow - current.LastUpdateCheck < TimeSpan.FromHours(24))
+        {
+            return;
+        }
+        try
+        {
+            DownloadInfo latest = await GetDownloadInfo(deviceType, cudaVersion);
+            current.LastUpdateCheck = DateTime.UtcNow;
+            SaveVersionInfo(versionPath, current);
+            if (latest?.TagName is null)
+            {
+                return;
+            }
+            if (current.TagName != latest.TagName)
+            {
+                Logs.Warning($"[SDcpp] Auto-update is disabled. Installed SD.cpp version is '{current.TagName}', latest is '{latest.TagName}'. Enable Auto-Update to download the latest prebuilt binary.");
+            }
+        }
+        catch
+        {
+            // ignore update check failures
         }
     }
 
@@ -175,6 +219,27 @@ public static class SDcppDownloadManager
         return setting is "11" or "12" ? setting : "12";
     }
 
+    public static string ResolveCpuDeviceType()
+    {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64)
+        {
+            return "cpu";
+        }
+        if (Avx512F.IsSupported)
+        {
+            return "cpu-avx512";
+        }
+        if (Avx2.IsSupported)
+        {
+            return "cpu-avx2";
+        }
+        if (Avx.IsSupported)
+        {
+            return "cpu-avx";
+        }
+        return "cpu-noavx";
+    }
+
     public static string GetDeviceDirectory(string deviceType, string cudaVersion)
     {
         string baseDir = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, "dlbackend", "sdcpp");
@@ -183,37 +248,74 @@ public static class SDcppDownloadManager
 
     public static JToken FindMatchingAsset(JArray assets, string deviceType, string cudaVersion)
     {
-        string pattern = GetAssetPattern(deviceType, cudaVersion);
-        if (pattern is null) return null;
-        foreach (JToken asset in assets)
+        string[] patterns = GetAssetPatterns(deviceType, cudaVersion);
+        if (patterns is null || patterns.Length == 0) return null;
+        foreach (string pattern in patterns)
         {
-            string name = asset["name"]?.ToString();
-            if (name is not null && name.Contains(pattern, StringComparison.OrdinalIgnoreCase)) return asset;
+            foreach (JToken asset in assets)
+            {
+                string name = asset["name"]?.ToString();
+                if (name is not null && name.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                {
+                    return asset;
+                }
+            }
         }
         return null;
     }
 
-    public static string GetAssetPattern(string deviceType, string cudaVersion)
+    public static string[] GetAssetPatterns(string deviceType, string cudaVersion)
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             return deviceType switch
             {
-                "cuda" => $"win-cuda{cudaVersion}-x64",
-                "vulkan" => "win-vulkan-x64",
-                _ => "win-avx2-x64"
+                // Modern releases (2026-01) use sd-master-<sha>-bin-win-cuda12-x64.zip.
+                // Some releases also ship cudart-sd-bin-win-cu12-x64.zip.
+                "cuda" => cudaVersion switch
+                {
+                    "11" => [$"bin-win-cuda11-x64", $"cudart-sd-bin-win-cu11-x64"],
+                    _ => [$"bin-win-cuda12-x64", $"cudart-sd-bin-win-cu12-x64"]
+                },
+                "vulkan" => ["bin-win-vulkan-x64"],
+                "metal" => ["bin-win-metal-x64"],
+                "opencl" => ["bin-win-opencl-x64"],
+                "sycl" => ["bin-win-sycl-x64"],
+                "cpu-avx512" => ["bin-win-avx512-x64"],
+                "cpu-avx2" => ["bin-win-avx2-x64"],
+                "cpu-avx" => ["bin-win-avx-x64"],
+                "cpu-noavx" => ["bin-win-noavx-x64"],
+                _ => ["bin-win-avx2-x64"]
             };
         }
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "Linux";
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "Darwin-macOS";
-        return null;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return deviceType switch
+            {
+                "vulkan" => ["bin-Linux-Ubuntu-24.04-x86_64-vulkan"],
+                "opencl" => ["bin-Linux-Ubuntu-24.04-x86_64-opencl"],
+                "sycl" => ["bin-Linux-Ubuntu-24.04-x86_64-sycl"],
+                _ => ["bin-Linux-Ubuntu-24.04-x86_64"]
+            };
+        }
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            // macOS releases include version and arch in the filename (e.g. sd-master-<sha>-bin-Darwin-macOS-15.7.3-arm64.zip)
+            // Match on the stable prefix.
+            return ["bin-Darwin-macOS"]; 
+        }
+        return [];
     }
 
     public static DownloadInfo GetFallbackInfo(string deviceType, string cudaVersion)
     {
         string baseUrl = $"https://github.com/leejet/stable-diffusion.cpp/releases/download/{FALLBACK_RELEASE_TAG}/";
         (string fileName, long size) = GetFallbackAsset(deviceType, cudaVersion);
-        if (fileName is null) return null;
+        if (fileName is null)
+        {
+            Logs.Warning($"[SDcpp] No fallback prebuilt binary is known for device '{deviceType}'. {BuildFromSourceMessage(deviceType)}");
+            return null;
+        }
         return new DownloadInfo
         {
             FileName = fileName,
@@ -231,11 +333,16 @@ public static class SDcppDownloadManager
             {
                 "cuda" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-cuda{cudaVersion}-x64.zip", 48_000_000),
                 "vulkan" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-vulkan-x64.zip", 7_000_000),
+                "opencl" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-opencl-x64.zip", 7_000_000),
+                "sycl" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-sycl-x64.zip", 7_000_000),
+                "cpu-avx512" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx512-x64.zip", 2_000_000),
+                "cpu-avx" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx-x64.zip", 2_000_000),
+                "cpu-noavx" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-noavx-x64.zip", 2_000_000),
                 _ => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx2-x64.zip", 2_000_000)
             };
         }
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return ("sd-master--bin-Linux-Ubuntu-24.04-x86_64.zip", 2_400_000);
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ("sd-master--bin-Darwin-macOS-14.7.6-arm64.zip", 4_300_000);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return ($"sd-master--bin-Linux-Ubuntu-24.04-x86_64.zip", 2_400_000);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ($"sd-master--bin-Darwin-macOS-14.7.6-arm64.zip", 4_300_000);
         return (null, 0);
     }
 

@@ -407,17 +407,16 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
+            string device = (Settings.Device ?? "cpu").ToLowerInvariant();
+            bool isCpu = device == "cpu";
+            processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = device == "vulkan" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_CUDA"] = device == "cuda" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_METAL"] = device == "metal" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = device == "opencl" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_SYCL"] = device == "sycl" ? "1" : "0";
+            if (Settings.DebugMode && isCpu)
             {
-                processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_CUDA"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_METAL"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_SYCL"] = "0";
-                if (Settings.DebugMode)
-                {
-                    Logs.Debug("[SDcpp] Forcing CPU-only mode via environment variables");
-                }
+                Logs.Debug("[SDcpp] Forcing CPU-only mode via environment variables");
             }
             if (Settings.DebugMode)
             {
@@ -503,14 +502,12 @@ public class SDcppProcessManager : IDisposable
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            if (Settings.Device.Equals("cpu", StringComparison.InvariantCultureIgnoreCase))
-            {
-                processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_CUDA"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_METAL"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = "0";
-                processInfo.EnvironmentVariables["GGML_USE_SYCL"] = "0";
-            }
+            string device = (Settings.Device ?? "cpu").ToLowerInvariant();
+            processInfo.EnvironmentVariables["GGML_USE_VULKAN"] = device == "vulkan" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_CUDA"] = device == "cuda" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_METAL"] = device == "metal" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_OPENCL"] = device == "opencl" ? "1" : "0";
+            processInfo.EnvironmentVariables["GGML_USE_SYCL"] = device == "sycl" ? "1" : "0";
             if (Settings.DebugMode)
             {
                 Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
