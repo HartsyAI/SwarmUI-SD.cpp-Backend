@@ -48,7 +48,7 @@ public static class SDcppDownloadManager
             }
             return executable;
         }
-        if (!string.IsNullOrEmpty(currentPath) && File.Exists(currentPath))
+        if (!string.IsNullOrEmpty(currentPath) && File.Exists(currentPath) && currentPath.StartsWith(deviceDir, StringComparison.OrdinalIgnoreCase))
         {
             return currentPath;
         }
@@ -278,6 +278,7 @@ public static class SDcppDownloadManager
                     _ => [$"bin-win-cuda12-x64", $"cudart-sd-bin-win-cu12-x64"]
                 },
                 "vulkan" => ["bin-win-vulkan-x64"],
+                "rocm" => ["bin-win-rocm-x64"],
                 "metal" => ["bin-win-metal-x64"],
                 "opencl" => ["bin-win-opencl-x64"],
                 "sycl" => ["bin-win-sycl-x64"],
@@ -292,7 +293,11 @@ public static class SDcppDownloadManager
         {
             return deviceType switch
             {
+                // No prebuilt CUDA binary exists for Linux — sd.cpp releases only provide Vulkan and ROCm GPU builds.
+                // Return null so the caller gets a clear "not available" message instead of silently using a CPU binary.
+                "cuda" => [],
                 "vulkan" => ["bin-Linux-Ubuntu-24.04-x86_64-vulkan"],
+                "rocm" => ["bin-Linux-Ubuntu-24.04-x86_64-rocm"],
                 "opencl" => ["bin-Linux-Ubuntu-24.04-x86_64-opencl"],
                 "sycl" => ["bin-Linux-Ubuntu-24.04-x86_64-sycl"],
                 _ => ["bin-Linux-Ubuntu-24.04-x86_64"]
@@ -341,8 +346,17 @@ public static class SDcppDownloadManager
                 _ => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx2-x64.zip", 2_000_000)
             };
         }
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return ($"sd-master--bin-Linux-Ubuntu-24.04-x86_64.zip", 2_400_000);
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ($"sd-master--bin-Darwin-macOS-14.7.6-arm64.zip", 4_300_000);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return deviceType switch
+            {
+                "cuda" => (null, 0), // No prebuilt CUDA binary for Linux
+                "vulkan" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip", 3_500_000),
+                "rocm" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64-rocm.zip", 3_500_000),
+                _ => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64.zip", 2_400_000)
+            };
+        }
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ($"sd-{FALLBACK_RELEASE_TAG}-bin-Darwin-macOS-14.7.6-arm64.zip", 4_300_000);
         return (null, 0);
     }
 

@@ -23,8 +23,8 @@ public class SDcppBackend : AbstractT2IBackend
     /// <summary>Backend configuration settings with automatic download and device selection</summary>
     public class SDcppBackendSettings : AutoConfiguration
     {
-        [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.\n'GPU (Metal)' uses Apple Silicon / macOS Metal acceleration.\n'GPU (OpenCL)' uses OpenCL-capable devices (varies by platform/driver).\n'GPU (SYCL)' uses SYCL devices (commonly Intel GPUs; requires the relevant runtime).\nNote: Flux models may not work reliably with Vulkan - use CUDA or CPU instead.")]
-        [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan", "metal", "opencl", "sycl"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)", "GPU (Metal - Apple)", "GPU (OpenCL)", "GPU (SYCL)"])]
+        [ConfigComment("Which compute device to use for image generation.\n'CPU' uses your processor (slower but works on any system).\n'GPU (CUDA)' uses NVIDIA graphics cards with CUDA support.\n'GPU (Vulkan)' uses any modern graphics card with Vulkan support.\n'GPU (ROCm)' uses AMD graphics cards with ROCm support.\n'GPU (Metal)' uses Apple Silicon / macOS Metal acceleration.\n'GPU (OpenCL)' uses OpenCL-capable devices (varies by platform/driver).\n'GPU (SYCL)' uses SYCL devices (commonly Intel GPUs; requires the relevant runtime).\nNote: Flux models may not work reliably with Vulkan - use CUDA or CPU instead.")]
+        [ManualSettingsOptions(Impl = null, Vals = ["cpu", "cuda", "vulkan", "rocm", "metal", "opencl", "sycl"], ManualNames = ["CPU (Universal)", "GPU (CUDA - NVIDIA)", "GPU (Vulkan - Any GPU)", "GPU (ROCm - AMD)", "GPU (Metal - Apple)", "GPU (OpenCL)", "GPU (SYCL)"])]
         public string Device = "cpu";
 
         [ConfigComment("CUDA version to use (only applies when Device is set to CUDA).\n'Auto' automatically detects your installed CUDA version and downloads the matching binary.\n'CUDA 11.x' for older NVIDIA drivers (driver 450+).\n'CUDA 12.x' for newer NVIDIA drivers (driver 525+).\nNote: If unsure, leave on Auto - it will select the best version for your system.")]
@@ -58,8 +58,8 @@ public class SDcppBackend : AbstractT2IBackend
         public int OverQueue = 1;
 
         [ConfigComment("VRAM management policy for automatic memory optimization.\n'Auto' intelligently applies offload flags based on model size and available VRAM.\n'Always Offload' forces all memory-saving flags on (slower but uses less VRAM).\n'Disabled' never auto-applies flags (you control everything via manual parameters).")]
-        [ManualSettingsOptions(Impl = null, Vals = ["auto", "offload", "disabled"], ManualNames = ["Auto (Recommended)", "Always Offload", "Disabled (Manual Control)"])]
-        public string VramPolicy = "auto";
+        [ManualSettingsOptions(Impl = null, Vals = ["auto", "offload", "disabled"], ManualNames = ["Auto", "Always Offload", "Disabled (Recommended)"])]
+        public string VramPolicy = "disabled";
 
         [SettingHidden]
         internal string ExecutablePath = "";

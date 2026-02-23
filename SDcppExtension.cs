@@ -76,40 +76,22 @@ public class SDcppExtension : Extension
     /// <inheritdoc/>
     public override void OnPreInit()
     {
-        try
-        {
-            Program.ModelRefreshEvent += OnModelRefresh;
-            Program.ModelPathsChangedEvent += OnModelPathsChanged;
-        }
-        catch (Exception ex)
-        {
-            Logs.Error($"[SDcpp] Critical error during pre-initialization: {ex.Message}");
-        }
+        Program.ModelRefreshEvent += OnModelRefresh;
+        Program.ModelPathsChangedEvent += OnModelPathsChanged;
     }
 
     /// <summary>Called when SwarmUI refreshes its model list</summary>
-    public void OnModelRefresh()
-    {
-        try
-        {
-            Logs.Verbose("[SDcpp] Model refresh event received");
-            foreach (SDcppBackend backend in Program.Backends.RunningBackendsOfType<SDcppBackend>())
-            {
-                backend.RefreshModels();
-            }
-        }
-        catch (Exception ex)
-        {
-            Logs.Error($"[SDcpp] Error handling model refresh: {ex.Message}");
-        }
-    }
+    public void OnModelRefresh() => RefreshAllBackends("Model refresh event received");
 
     /// <summary>Called when model paths are changed in settings</summary>
-    public void OnModelPathsChanged()
+    public void OnModelPathsChanged() => RefreshAllBackends("Model paths changed event received");
+
+    /// <summary>Refreshes models on all running SD.cpp backends</summary>
+    private void RefreshAllBackends(string reason)
     {
         try
         {
-            Logs.Verbose("[SDcpp] Model paths changed event received");
+            Logs.Verbose($"[SDcpp] {reason}");
             foreach (SDcppBackend backend in Program.Backends.RunningBackendsOfType<SDcppBackend>())
             {
                 backend.RefreshModels();
@@ -117,7 +99,7 @@ public class SDcppExtension : Extension
         }
         catch (Exception ex)
         {
-            Logs.Error($"[SDcpp] Error handling model paths change: {ex.Message}");
+            Logs.Error($"[SDcpp] Error during backend refresh ({reason}): {ex.Message}");
         }
     }
 
@@ -276,6 +258,7 @@ public class SDcppExtension : Extension
         catch (Exception ex)
         {
             Logs.Error($"[SDcpp] Error registering parameters: {ex.Message}");
+            throw;
         }
     }
 
@@ -283,6 +266,8 @@ public class SDcppExtension : Extension
     public override void OnShutdown()
     {
         Logs.Info("[SDcpp] Shutting down extension");
+        Program.ModelRefreshEvent -= OnModelRefresh;
+        Program.ModelPathsChangedEvent -= OnModelPathsChanged;
     }
 
     /// <summary>Creates a standardized error response for API endpoints</summary>
