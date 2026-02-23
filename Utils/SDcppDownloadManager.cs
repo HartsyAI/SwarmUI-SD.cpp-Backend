@@ -13,11 +13,20 @@ namespace Hartsy.Extensions.SDcppExtension.Utils;
 public static class SDcppDownloadManager
 {
     public const string GITHUB_API_URL = "https://api.github.com/repos/leejet/stable-diffusion.cpp/releases/latest";
-    public const string FALLBACK_RELEASE_TAG = "master-471-7010bb4";
+    public const string FALLBACK_RELEASE_TAG = "master-505-c5eb1e4";
+    /// <summary>Short commit hash used in filenames (release tags are "master-NUM-SHA" but filenames are "sd-master-SHA-bin-...").</summary>
+    public const string FALLBACK_COMMIT_SHA = "c5eb1e4";
     public const string VERSION_FILE = "sdcpp_version.json";
 
     public static string BuildFromSourceMessage(string deviceType)
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux) && deviceType is "cuda")
+        {
+            return "No prebuilt CUDA binary is available for Linux. Options:\n" +
+                "  1. Use 'GPU (Vulkan)' device — requires libvulkan1 (apt-get install libvulkan1 libvulkan-dev)\n" +
+                "  2. Use 'CPU' device — works everywhere but is slower\n" +
+                "  3. Build stable-diffusion.cpp from source with CUDA support and configure the executable path manually";
+        }
         return $"No prebuilt SD.cpp binary is available for the requested device '{deviceType}' on this platform. If you want to use that backend, you will need to build stable-diffusion.cpp from source and configure the executable path manually.";
     }
 
@@ -294,12 +303,13 @@ public static class SDcppDownloadManager
             return deviceType switch
             {
                 // No prebuilt CUDA binary exists for Linux — sd.cpp releases only provide Vulkan and ROCm GPU builds.
-                // Return null so the caller gets a clear "not available" message instead of silently using a CPU binary.
+                // Return empty so the caller gets a clear "not available" message instead of silently using a CPU binary.
                 "cuda" => [],
                 "vulkan" => ["bin-Linux-Ubuntu-24.04-x86_64-vulkan"],
                 "rocm" => ["bin-Linux-Ubuntu-24.04-x86_64-rocm"],
-                "opencl" => ["bin-Linux-Ubuntu-24.04-x86_64-opencl"],
-                "sycl" => ["bin-Linux-Ubuntu-24.04-x86_64-sycl"],
+                // OpenCL and SYCL have no prebuilt Linux binaries — return empty for clear error messaging
+                "opencl" => [],
+                "sycl" => [],
                 _ => ["bin-Linux-Ubuntu-24.04-x86_64"]
             };
         }
@@ -332,18 +342,19 @@ public static class SDcppDownloadManager
 
     public static (string fileName, long size) GetFallbackAsset(string deviceType, string cudaVersion)
     {
+        // NOTE: Release tags use format "master-NUM-SHA" but filenames use "sd-master-SHA-bin-..."
+        string sha = FALLBACK_COMMIT_SHA;
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             return deviceType switch
             {
-                "cuda" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-cuda{cudaVersion}-x64.zip", 48_000_000),
-                "vulkan" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-vulkan-x64.zip", 7_000_000),
-                "opencl" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-opencl-x64.zip", 7_000_000),
-                "sycl" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-sycl-x64.zip", 7_000_000),
-                "cpu-avx512" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx512-x64.zip", 2_000_000),
-                "cpu-avx" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx-x64.zip", 2_000_000),
-                "cpu-noavx" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-noavx-x64.zip", 2_000_000),
-                _ => ($"sd-{FALLBACK_RELEASE_TAG}-bin-win-avx2-x64.zip", 2_000_000)
+                "cuda" => ($"sd-master-{sha}-bin-win-cuda{cudaVersion}-x64.zip", 326_000_000),
+                "vulkan" => ($"sd-master-{sha}-bin-win-vulkan-x64.zip", 24_000_000),
+                "rocm" => ($"sd-master-{sha}-bin-win-rocm-x64.zip", 344_000_000),
+                "cpu-avx512" => ($"sd-master-{sha}-bin-win-avx512-x64.zip", 8_400_000),
+                "cpu-avx" => ($"sd-master-{sha}-bin-win-avx-x64.zip", 8_400_000),
+                "cpu-noavx" => ($"sd-master-{sha}-bin-win-noavx-x64.zip", 8_400_000),
+                _ => ($"sd-master-{sha}-bin-win-avx2-x64.zip", 8_400_000)
             };
         }
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -351,12 +362,12 @@ public static class SDcppDownloadManager
             return deviceType switch
             {
                 "cuda" => (null, 0), // No prebuilt CUDA binary for Linux
-                "vulkan" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip", 3_500_000),
-                "rocm" => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64-rocm.zip", 3_500_000),
-                _ => ($"sd-{FALLBACK_RELEASE_TAG}-bin-Linux-Ubuntu-24.04-x86_64.zip", 2_400_000)
+                "vulkan" => ($"sd-master-{sha}-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip", 22_700_000),
+                "rocm" => ($"sd-master-{sha}-bin-Linux-Ubuntu-24.04-x86_64-rocm.zip", 868_000_000),
+                _ => ($"sd-master-{sha}-bin-Linux-Ubuntu-24.04-x86_64.zip", 9_800_000)
             };
         }
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ($"sd-{FALLBACK_RELEASE_TAG}-bin-Darwin-macOS-14.7.6-arm64.zip", 4_300_000);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return ($"sd-master-{sha}-bin-Darwin-macOS-15.7.3-arm64.zip", 18_700_000);
         return (null, 0);
     }
 
