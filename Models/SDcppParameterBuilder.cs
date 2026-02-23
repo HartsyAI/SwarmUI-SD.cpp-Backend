@@ -427,23 +427,37 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
     }
 
-    public void AddModelComponents(Dictionary<string, object> parameters, T2IParamInput input, 
+    public void AddModelComponents(Dictionary<string, object> parameters, T2IParamInput input,
         bool isFluxBased, bool isSD3Model, bool isZImageModel, bool isQwenImageModel, bool requiresQwenLLM)
     {
         if (string.IsNullOrEmpty(modelName)) return;
         T2IModel mainModel = Program.T2IModelSets["Stable-Diffusion"].Models.Values.FirstOrDefault(m => m.Name == modelName);
-        
+
         // DiT-based models use diffusion_model parameter
         bool isDiTModel = isFluxBased || isSD3Model || isZImageModel || isQwenImageModel;
-        
+        bool isFlux2Dev = architecture is "flux2-dev";
+        bool isFlux2Klein4B = architecture is "flux2-klein-4b";
+        bool isFlux2Klein9B = architecture is "flux2-klein-9b";
+        bool isAnyFlux2 = isFlux2Dev || isFlux2Klein4B || isFlux2Klein9B;
+        bool isChroma = architecture is "chroma" or "chroma-radiance";
+
         if (isDiTModel && mainModel is not null)
         {
             parameters["diffusion_model"] = mainModel.RawFilePath;
-            
-            // Add VAE (Flux-based and Z-Image share the same Flux VAE)
-            bool needsFluxVAE = isFluxBased || isZImageModel;
-            AddVAE(parameters, input, needsFluxVAE, isZImageModel);
-            
+
+            // Add VAE based on architecture
+            if (isAnyFlux2)
+            {
+                // All Flux 2 variants (Dev, Klein 4B, Klein 9B) use 32-channel VAE, NOT the Flux 1 VAE
+                AddFlux2VAE(parameters, input);
+            }
+            else
+            {
+                // Flux 1, Chroma, and Z-Image share the standard Flux VAE (ae.safetensors)
+                bool needsFluxVAE = isFluxBased || isZImageModel;
+                AddVAE(parameters, input, needsFluxVAE, isZImageModel);
+            }
+
             // Add text encoders based on architecture
             if (isSD3Model)
             {
@@ -452,9 +466,31 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 AddCLIPEncoders(parameters, input);
                 AddT5XXL(parameters, input);
             }
+            else if (isFlux2Klein9B)
+            {
+                // Flux 2 Klein 9B uses Qwen 3 8B LLM
+                AddQwen8BLLM(parameters, input);
+            }
+            else if (isFlux2Klein4B)
+            {
+                // Flux 2 Klein 4B uses Qwen 3 4B LLM
+                AddQwenLLM(parameters, input);
+            }
+            else if (isFlux2Dev)
+            {
+                // Flux 2 Dev uses Mistral LLM - route through generic Qwen for now
+                // TODO: Add dedicated AddMistralLLM when SD.cpp Flux 2 Dev support is confirmed
+                AddQwenLLM(parameters, input);
+                Logs.Warning("[SDcpp] Flux 2 Dev text encoder support is experimental. Flux 2 Klein models are recommended.");
+            }
+            else if (isChroma)
+            {
+                // Chroma uses T5-XXL only (no CLIP-L)
+                AddT5XXL(parameters, input);
+            }
             else if (isFluxBased)
             {
-                // Flux-based models need CLIP-L and T5-XXL (no CLIP-G)
+                // Flux 1 models (dev, schnell, kontext, ovis) need CLIP-L and T5-XXL
                 AddCLIPEncoders(parameters, input);
                 AddT5XXL(parameters, input);
             }
@@ -468,13 +504,13 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 // Qwen Image models use Qwen LLM
                 AddQwenLLM(parameters, input);
             }
-            
+
             // Some architectures may need additional LLM components
             if (requiresQwenLLM && !parameters.ContainsKey("llm"))
             {
                 AddQwenLLM(parameters, input);
             }
-            
+
             ValidateRequiredComponents(parameters, isFluxBased, isSD3Model, isZImageModel, isQwenImageModel);
         }
         else if (mainModel is not null)
@@ -509,6 +545,38 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         {
             Logs.Info($"[SDcpp] {(isFluxModel ? "Flux" : "Z-Image")} VAE not found, auto-downloading...");
             string vaePath = SDcppModelManager.EnsureModelExists("VAE", "Flux/ae.safetensors", "https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/flux_ae.safetensors", "afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38");
+            if (!string.IsNullOrEmpty(vaePath))
+            {
+                parameters["vae"] = vaePath;
+            }
+        }
+    }
+
+    public void AddFlux2VAE(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (input.TryGet(T2IParamTypes.VAE, out T2IModel vaeModel) && vaeModel is not null && vaeModel.Name is not "(none)")
+        {
+            parameters["vae"] = vaeModel.RawFilePath;
+            Logs.Debug($"[SDcpp] Using user-specified VAE: {vaeModel.Name}");
+            return;
+        }
+        T2IModelHandler vaeModelSet = Program.T2IModelSets["VAE"];
+        // Match any Flux 2 VAE variant: flux2-vae.safetensors (Comfy-Org name) or flux2_ae.safetensors (BFL name)
+        T2IModel flux2Vae = vaeModelSet.Models.Values.FirstOrDefault(m =>
+            m.Name.Contains("flux2", StringComparison.OrdinalIgnoreCase) &&
+            (m.Name.Contains("vae", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("ae", StringComparison.OrdinalIgnoreCase)));
+        if (flux2Vae is not null)
+        {
+            parameters["vae"] = flux2Vae.RawFilePath;
+            Logs.Debug($"[SDcpp] Using existing Flux 2 VAE: {flux2Vae.Name}");
+        }
+        else
+        {
+            // Use the same non-gated Comfy-Org mirror that SwarmUI's CommonModels registry uses
+            Logs.Info("[SDcpp] Flux 2 VAE not found, auto-downloading from Comfy-Org mirror...");
+            string vaePath = SDcppModelManager.EnsureModelExists("VAE", "Flux/flux2-vae.safetensors",
+                "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+                "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5");
             if (!string.IsNullOrEmpty(vaePath))
             {
                 parameters["vae"] = vaePath;
@@ -609,32 +677,85 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         {
             parameters["llm"] = qwenModel.RawFilePath;
             Logs.Debug($"[SDcpp] Using user-specified Qwen model: {qwenModel.Name}");
+            return;
         }
-        else
+        T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
+        // SD.cpp requires full-precision (BF16) Qwen models. SwarmUI's ComfyUI backend downloads
+        // qwen_3_4b_fp8_mixed.safetensors and saves it as "qwen_3_4b.safetensors", which SD.cpp
+        // can't parse (results in wrong tensor shapes). We use a distinct filename to avoid conflicts.
+        // First: look for our previously downloaded BF16 version
+        T2IModel bf16Qwen = clipModelSet.Models.Values.FirstOrDefault(m =>
+            m.Name.Contains("qwen_3_4b_bf16", StringComparison.OrdinalIgnoreCase));
+        if (bf16Qwen is not null)
         {
-            T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
-            // Z-Image specifically requires Qwen 3 4B - other Qwen models (like qwen_2.5_vl) are NOT compatible
-            // Priority order: exact match for qwen_3_4b variants, then download if not found
-            T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m =>
-                m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) ||
-                m.Name.Contains("qwen3_4b", StringComparison.OrdinalIgnoreCase) ||
-                m.Name.Contains("qwen-3-4b", StringComparison.OrdinalIgnoreCase));
-
-            if (existingQwen is not null)
+            parameters["llm"] = bf16Qwen.RawFilePath;
+            Logs.Debug($"[SDcpp] Using existing Qwen 3 4B (BF16): {bf16Qwen.Name}");
+            return;
+        }
+        // Second: check if existing qwen_3_4b is the full-precision version (~8GB, not fp8 ~5.6GB)
+        T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m =>
+            (m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) ||
+             m.Name.Contains("qwen3_4b", StringComparison.OrdinalIgnoreCase) ||
+             m.Name.Contains("qwen-3-4b", StringComparison.OrdinalIgnoreCase)) &&
+            !m.Name.Contains("fp8", StringComparison.OrdinalIgnoreCase) &&
+            !m.Name.Contains("fp4", StringComparison.OrdinalIgnoreCase));
+        if (existingQwen is not null)
+        {
+            try
             {
-                parameters["llm"] = existingQwen.RawFilePath;
-                Logs.Debug($"[SDcpp] Using existing Qwen 3 4B model: {existingQwen.Name}");
-            }
-            else
-            {
-                Logs.Info("[SDcpp] Z-Image requires Qwen 3 4B model (other Qwen versions are not compatible), auto-downloading...");
-                string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b.safetensors", "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
-                    "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
-                if (!string.IsNullOrEmpty(qwenPath))
+                long fileSize = new FileInfo(existingQwen.RawFilePath).Length;
+                if (fileSize > 7_000_000_000) // > 7GB = full-precision BF16 (~8.04GB)
                 {
-                    parameters["llm"] = qwenPath;
+                    parameters["llm"] = existingQwen.RawFilePath;
+                    Logs.Debug($"[SDcpp] Using existing Qwen 3 4B (verified full-precision, {fileSize / 1_000_000_000.0:F1}GB): {existingQwen.Name}");
+                    return;
                 }
+                Logs.Info($"[SDcpp] Found {existingQwen.Name} but it appears to be a quantized version ({fileSize / 1_000_000_000.0:F1}GB). SD.cpp requires full-precision BF16. Downloading...");
             }
+            catch (Exception ex)
+            {
+                Logs.Warning($"[SDcpp] Could not check file size of {existingQwen.Name}: {ex.Message}");
+            }
+        }
+        // Download full-precision BF16 version with distinct filename to avoid conflicts with ComfyUI's fp8 version
+        Logs.Info("[SDcpp] Qwen 3 4B (BF16) not found, auto-downloading full-precision version for SD.cpp...");
+        string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b_bf16.safetensors",
+            "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+            "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a");
+        if (!string.IsNullOrEmpty(qwenPath))
+        {
+            parameters["llm"] = qwenPath;
+        }
+    }
+
+    public void AddQwen8BLLM(Dictionary<string, object> parameters, T2IParamInput input)
+    {
+        if (input.TryGet(T2IParamTypes.QwenModel, out T2IModel qwenModel) && qwenModel is not null)
+        {
+            parameters["llm"] = qwenModel.RawFilePath;
+            Logs.Debug($"[SDcpp] Using user-specified Qwen model: {qwenModel.Name}");
+            return;
+        }
+        T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
+        // Look for existing Qwen 3 8B model
+        T2IModel existingQwen8B = clipModelSet.Models.Values.FirstOrDefault(m =>
+            m.Name.Contains("qwen_3_8b", StringComparison.OrdinalIgnoreCase) ||
+            m.Name.Contains("qwen3_8b", StringComparison.OrdinalIgnoreCase) ||
+            m.Name.Contains("qwen-3-8b", StringComparison.OrdinalIgnoreCase));
+        if (existingQwen8B is not null)
+        {
+            parameters["llm"] = existingQwen8B.RawFilePath;
+            Logs.Debug($"[SDcpp] Using existing Qwen 3 8B model: {existingQwen8B.Name}");
+            return;
+        }
+        // Download Qwen 3 8B for Flux 2 Klein 9B
+        Logs.Info("[SDcpp] Qwen 3 8B not found, auto-downloading for Flux 2 Klein 9B...");
+        string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_8b.safetensors",
+            "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp4mixed.safetensors",
+            "bbf16f981d98e16d080c566134814c4e9f6aadd0d0e1383c60bc44ba939d760d");
+        if (!string.IsNullOrEmpty(qwenPath))
+        {
+            parameters["llm"] = qwenPath;
         }
     }
 
@@ -643,7 +764,47 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     {
         List<string> missing = [];
 
-        if (isFluxBased)
+        if (architecture is "flux2-klein-4b")
+        {
+            if (!parameters.ContainsKey("vae")) missing.Add("VAE (flux2-vae.safetensors)");
+            if (!parameters.ContainsKey("llm")) missing.Add("Qwen 3 4B LLM (qwen_3_4b_bf16.safetensors)");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Flux 2 Klein 4B requires additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• Qwen LLM → Models/clip/");
+            }
+            Logs.Info($"[SDcpp] All {architecture} components found successfully");
+        }
+        else if (architecture is "flux2-klein-9b")
+        {
+            if (!parameters.ContainsKey("vae")) missing.Add("VAE (flux2-vae.safetensors)");
+            if (!parameters.ContainsKey("llm")) missing.Add("Qwen 3 8B LLM (qwen_3_8b.safetensors)");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Flux 2 Klein 9B requires additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• Qwen LLM → Models/clip/");
+            }
+            Logs.Info($"[SDcpp] All {architecture} components found successfully");
+        }
+        else if (architecture is "flux2-dev")
+        {
+            if (!parameters.ContainsKey("vae")) missing.Add("VAE (flux2-vae.safetensors)");
+            if (!parameters.ContainsKey("llm")) missing.Add("LLM text encoder");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Flux 2 Dev requires additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• LLM → Models/clip/");
+            }
+            Logs.Info($"[SDcpp] All {architecture} components found successfully");
+        }
+        else if (architecture is "chroma" or "chroma-radiance")
+        {
+            if (!parameters.ContainsKey("vae")) missing.Add("VAE (ae.safetensors)");
+            if (!parameters.ContainsKey("t5xxl")) missing.Add("T5-XXL (t5xxl_fp16.safetensors or t5xxl_fp8_e4m3fn.safetensors)");
+            if (missing.Count > 0)
+            {
+                throw new InvalidOperationException($"Chroma models require additional component files.\n\nMissing components:\n  • {string.Join("\n  • ", missing)}\n\nThese should auto-download. If download failed, manually download and place in:\n• VAE → Models/VAE/\n• T5-XXL → Models/clip/");
+            }
+            Logs.Info($"[SDcpp] All {architecture} components found successfully");
+        }
+        else if (isFluxBased)
         {
             if (!parameters.ContainsKey("vae")) missing.Add("VAE (ae.safetensors)");
             if (!parameters.ContainsKey("clip_l")) missing.Add("CLIP-L (clip_l.safetensors)");

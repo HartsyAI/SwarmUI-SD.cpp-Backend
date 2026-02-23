@@ -69,8 +69,16 @@ public static class SDcppModelManager
             // Flux Kontext (image editing)
             if (filename.Contains("kontext") || modelName.Contains("kontext") || modelClass.Contains("kontext"))
                 return "flux-kontext";
+            // Flux.2 Klein variants (check before generic Flux.2 since Klein contains "flux.2")
+            if (modelClass.Contains("klein-9b") || filename.Contains("klein-9b") || filename.Contains("klein_9b") ||
+                modelName.Contains("klein-9b") || modelName.Contains("klein_9b"))
+                return "flux2-klein-9b";
+            if (modelClass.Contains("klein-4b") || modelClass.Contains("klein") ||
+                filename.Contains("klein-4b") || filename.Contains("klein_4b") || filename.Contains("klein") ||
+                modelName.Contains("klein-4b") || modelName.Contains("klein_4b") || modelName.Contains("klein"))
+                return "flux2-klein-4b";
             // Flux.2 Dev
-            if (filename.Contains("flux.2") || filename.Contains("flux2") || modelName.Contains("flux.2") || 
+            if (filename.Contains("flux.2") || filename.Contains("flux2") || modelName.Contains("flux.2") ||
                 modelName.Contains("flux2") || modelClass.Contains("flux.2"))
                 return "flux2-dev";
             // Flux Schnell
@@ -234,6 +242,12 @@ public static class SDcppModelManager
             case "flux2-dev":
                 features.AddRange(["flux", "flux2", "flux2-dev", "lora", "controlnet"]);
                 break;
+            case "flux2-klein-4b":
+                features.AddRange(["flux", "flux2", "flux2-klein", "flux2-klein-4b", "lora"]);
+                break;
+            case "flux2-klein-9b":
+                features.AddRange(["flux", "flux2", "flux2-klein", "flux2-klein-9b", "lora"]);
+                break;
 
             // Chroma family (Flux-based distilled)
             case "chroma":
@@ -322,13 +336,13 @@ public static class SDcppModelManager
     public static bool IsVideoArchitecture(string architecture) =>
         architecture is "wan-2.1" or "wan-2.2" or "video";
 
-    /// <summary>Determines if the architecture is Flux-based (includes Chroma, Ovis).</summary>
+    /// <summary>Determines if the architecture is Flux-based (includes Chroma, Ovis, Klein).</summary>
     public static bool IsFluxBased(string architecture) =>
-        architecture is "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" or "chroma" or "chroma-radiance" or "ovis";
+        architecture is "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" or "flux2-klein-4b" or "flux2-klein-9b" or "chroma" or "chroma-radiance" or "ovis";
 
     /// <summary>Determines if the architecture requires a Qwen LLM component.</summary>
     public static bool RequiresQwenLLM(string architecture) =>
-        architecture is "z-image" or "qwen-image" or "qwen-image-edit";
+        architecture is "z-image" or "qwen-image" or "qwen-image-edit" or "flux2-klein-4b" or "flux2-klein-9b";
 
     /// <summary>Determines if the architecture is a distilled/fast model that works with fewer steps.</summary>
     public static bool IsDistilledModel(string architecture) =>
@@ -342,7 +356,7 @@ public static class SDcppModelManager
         "sdxl-turbo" or "sdxl-lightning" => 4,
         "sd15-turbo" => 4,
         "lcm" => 4,
-        "flux-dev" or "flux-kontext" or "flux2-dev" => 20,
+        "flux-dev" or "flux-kontext" or "flux2-dev" or "flux2-klein-4b" or "flux2-klein-9b" => 20,
         "ovis" => 20,
         "sd3" or "sd3.5" => 20,
         "qwen-image" or "qwen-image-edit" => 20,
@@ -353,7 +367,7 @@ public static class SDcppModelManager
     /// <summary>Gets the recommended CFG scale for a given architecture.</summary>
     public static double GetRecommendedCFG(string architecture) => architecture switch
     {
-        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" => 1.0,
+        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" or "flux2-klein-4b" or "flux2-klein-9b" => 1.0,
         "chroma" or "chroma-radiance" or "ovis" => 1.0,
         "sdxl-turbo" or "sdxl-lightning" => 1.0,
         "sd15-turbo" or "lcm" => 1.0,
@@ -366,7 +380,7 @@ public static class SDcppModelManager
     /// <summary>Gets the default resolution for a given architecture.</summary>
     public static (int width, int height) GetDefaultResolution(string architecture) => architecture switch
     {
-        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" => (1024, 1024),
+        "flux-dev" or "flux-schnell" or "flux-kontext" or "flux2-dev" or "flux2-klein-4b" or "flux2-klein-9b" => (1024, 1024),
         "chroma" or "chroma-radiance" or "ovis" => (1024, 1024),
         "sd3" or "sd3.5" => (1024, 1024),
         "sdxl" or "sdxl-turbo" or "sdxl-lightning" => (1024, 1024),
