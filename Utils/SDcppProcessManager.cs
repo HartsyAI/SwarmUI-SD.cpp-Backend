@@ -1,4 +1,5 @@
 using SwarmUI.Utils;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -9,12 +10,18 @@ namespace Hartsy.Extensions.SDcppExtension.Utils;
 /// <summary>Manages the lifecycle of SD.cpp CLI processes, handling command-line argument construction, process execution, output capture, and cleanup. Used by SDcppBackend to execute generation requests.</summary>
 public class SDcppProcessManager : IDisposable
 {
-    public Process Process;
+    /// <summary>Tracks all currently running SD.cpp processes for shutdown cleanup.</summary>
+    private readonly ConcurrentBag<Process> _activeProcesses = [];
+
     public readonly SDcppBackendSettings Settings;
     public readonly string WorkingDirectory;
     public bool Disposed = false;
     public bool PreviewArgsSupported { get; private set; } = false;
     public bool OutputArgSupported { get; private set; } = false;
+    public bool CachePresetSupported { get; private set; } = false;
+    public bool CacheOptionSupported { get; private set; } = false;
+    public bool SCMMaskSupported { get; private set; } = false;
+    public bool SCMPolicySupported { get; private set; } = false;
 
     public SDcppProcessManager(SDcppBackendSettings settings)
     {
@@ -133,12 +140,20 @@ public class SDcppProcessManager : IDisposable
                     if (isCuda)
                     {
                         Logs.Info("[SDcpp] CUDA binary started successfully (process is initializing)");
-                        Logs.Debug("[SDcpp] Killing validation process - we've confirmed it can start");
-                        try { testProcess.Kill(); } catch { }
-                        Logs.Info("[SDcpp] Runtime validation successful - CUDA runtime is available");
-                        return true;
+                        exited = testProcess.WaitForExit(25000);
+                        if (!exited)
+                        {
+                            Logs.Debug("[SDcpp] CUDA --help still running after extended wait, killing");
+                            try { testProcess.Kill(); } catch { }
+                            ParseCapabilities(stdout.ToString());
+                            Logs.Info("[SDcpp] Runtime validation successful - CUDA runtime available (capabilities partially detected)");
+                            return true;
+                        }
                     }
-                    exited = testProcess.WaitForExit(13000);
+                    else
+                    {
+                        exited = testProcess.WaitForExit(13000);
+                    }
                     if (!exited)
                     {
                         try { testProcess.Kill(); } catch { }
@@ -166,9 +181,7 @@ public class SDcppProcessManager : IDisposable
                     errorMessage = $"SD.cpp returned non-zero exit code {code} during startup test.\nError output: {stderrText}";
                     return false;
                 }
-                string stdoutTextFinal = stdout.ToString();
-                PreviewArgsSupported = stdoutTextFinal.Contains("--preview");
-                OutputArgSupported = stdoutTextFinal.Contains("--output");
+                ParseCapabilities(stdout.ToString());
                 Logs.Info("[SDcpp] Runtime validation successful");
                 return true;
             }
@@ -195,6 +208,43 @@ public class SDcppProcessManager : IDisposable
         }
     }
 
+    /// <summary>Converts raw SD.cpp stderr into a user-friendly error message.</summary>
+    public static string FormatProcessError(string rawError, int exitCode)
+    {
+        if (string.IsNullOrWhiteSpace(rawError))
+        {
+            return $"SD.cpp exited with code {exitCode} but produced no error output.";
+        }
+        // Detect "unknown argument" pattern from SD.cpp's common.hpp
+        System.Text.RegularExpressions.Match unknownArg = System.Text.RegularExpressions.Regex.Match(rawError, @"error:\s*unknown argument:\s*(.+)");
+        if (unknownArg.Success)
+        {
+            string arg = unknownArg.Groups[1].Value.Trim();
+            return $"SD.cpp does not recognize argument '{arg}'. Your SD.cpp build may be too old for this flag. Try updating SD.cpp or disabling the related parameter.";
+        }
+        if (rawError.Contains("CUDA out of memory") || rawError.Contains("out of memory") || rawError.Contains("alloc") && rawError.Contains("failed"))
+        {
+            return $"SD.cpp ran out of GPU memory. Try enabling VAE Tiling, VAE on CPU, or using a smaller resolution/quantized model.";
+        }
+        if (rawError.Contains("failed to load") || rawError.Contains("cannot open"))
+        {
+            return $"SD.cpp failed to load a model file. Check that all required model components exist. Raw error: {rawError.Trim()}";
+        }
+        return rawError.Trim();
+    }
+
+    /// <summary>Parses the --help output from SD.cpp to detect which CLI flags the binary supports.</summary>
+    public void ParseCapabilities(string helpOutput)
+    {
+        PreviewArgsSupported = helpOutput.Contains("--preview");
+        OutputArgSupported = helpOutput.Contains("--output");
+        CachePresetSupported = helpOutput.Contains("--cache-preset");
+        CacheOptionSupported = helpOutput.Contains("--cache-option");
+        SCMMaskSupported = helpOutput.Contains("--scm-mask");
+        SCMPolicySupported = helpOutput.Contains("--scm-policy");
+        Logs.Info($"[SDcpp] Detected capabilities: preview={PreviewArgsSupported}, output={OutputArgSupported}, cache-preset={CachePresetSupported}, cache-option={CacheOptionSupported}, scm-mask={SCMMaskSupported}");
+    }
+
     /// <summary>Constructs SD.cpp command-line arguments from generation parameters. Handles model paths, generation settings, memory optimization flags, and input images. Supports both standard SD models and Flux models with their multi-component architecture.</summary>
     /// <param name="parameters">Dictionary containing generation parameters like prompt, model, dimensions, etc.</param>
     /// <param name="isFluxModel">Whether this is a Flux model (uses different parameter names)</param>
@@ -207,7 +257,6 @@ public class SDcppProcessManager : IDisposable
         {
             if (PreviewArgsSupported)
             {
-                // Per-job override: preview_method / preview_interval
                 string previewMode = parameters.TryGetValue("preview_method", out object pmOverride) && !string.IsNullOrWhiteSpace(pmOverride?.ToString())
                     ? pmOverride.ToString()
                     : (parameters.TryGetValue("preview_mode", out object pm) ? pm?.ToString() ?? "tae" : "tae");
@@ -336,19 +385,23 @@ public class SDcppProcessManager : IDisposable
         if (parameters.TryGetValue("cache_mode", out object cacheMode) && !string.IsNullOrEmpty(cacheMode.ToString()))
         {
             args.Add($"--cache-mode {cacheMode}");
-            if (parameters.TryGetValue("cache_option", out object cacheOption) && !string.IsNullOrEmpty(cacheOption.ToString()))
+            if (CacheOptionSupported && parameters.TryGetValue("cache_option", out object cacheOption) && !string.IsNullOrEmpty(cacheOption.ToString()))
             {
                 args.Add($"--cache-option \"{cacheOption}\"");
             }
-            if (parameters.TryGetValue("cache_preset", out object cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
+            if (CachePresetSupported && parameters.TryGetValue("cache_preset", out object cachePreset) && !string.IsNullOrEmpty(cachePreset.ToString()))
             {
                 args.Add($"--cache-preset {cachePreset}");
             }
-            if (parameters.TryGetValue("scm_mask", out object scmMask) && !string.IsNullOrEmpty(scmMask.ToString()))
+            else if (!CachePresetSupported && parameters.ContainsKey("cache_preset"))
+            {
+                Logs.Debug("[SDcpp] Skipping --cache-preset (not supported by this SD.cpp build)");
+            }
+            if (SCMMaskSupported && parameters.TryGetValue("scm_mask", out object scmMask) && !string.IsNullOrEmpty(scmMask.ToString()))
             {
                 args.Add($"--scm-mask \"{scmMask}\"");
             }
-            if (parameters.TryGetValue("scm_policy", out object scmPolicy) && !string.IsNullOrEmpty(scmPolicy.ToString()))
+            if (SCMPolicySupported && parameters.TryGetValue("scm_policy", out object scmPolicy) && !string.IsNullOrEmpty(scmPolicy.ToString()))
             {
                 args.Add($"--scm-policy {scmPolicy}");
             }
@@ -395,6 +448,7 @@ public class SDcppProcessManager : IDisposable
     {
         if (!ValidateExecutable()) return (false, "", "SD.cpp executable validation failed");
         string commandLine = BuildCommandLine(parameters, isFluxModel);
+        Process process = null;
         try
         {
             ProcessStartInfo processInfo = new()
@@ -420,19 +474,20 @@ public class SDcppProcessManager : IDisposable
             }
             if (Settings.DebugMode)
             {
-                if (Settings.DebugMode) Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
+                Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
                 Logs.Debug($"[SDcpp] Working directory: {WorkingDirectory}");
             }
-            Process = Process.Start(processInfo);
-            if (Process is null) return (false, "", "Failed to start SD.cpp process");
+            process = Process.Start(processInfo);
+            if (process is null) return (false, "", "Failed to start SD.cpp process");
+            _activeProcesses.Add(process);
             StringBuilder outputBuilder = new();
             StringBuilder errorBuilder = new();
             bool logSdcpp = Logs.MinimumLevel <= Logs.LogLevel.Debug;
             Task outputTask = Task.Run(async () =>
             {
-                while (!Process.StandardOutput.EndOfStream)
+                while (!process.StandardOutput.EndOfStream)
                 {
-                    string line = await Process.StandardOutput.ReadLineAsync();
+                    string line = await process.StandardOutput.ReadLineAsync();
                     if (line is not null)
                     {
                         outputBuilder.AppendLine(line);
@@ -442,9 +497,9 @@ public class SDcppProcessManager : IDisposable
             });
             Task errorTask = Task.Run(async () =>
             {
-                while (!Process.StandardError.EndOfStream)
+                while (!process.StandardError.EndOfStream)
                 {
-                    string line = await Process.StandardError.ReadLineAsync();
+                    string line = await process.StandardError.ReadLineAsync();
                     if (line is not null)
                     {
                         errorBuilder.AppendLine(line);
@@ -453,19 +508,23 @@ public class SDcppProcessManager : IDisposable
                 }
             });
             Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(Settings.ProcessTimeoutSeconds));
-            Task processTask = Task.Run(() => Process.WaitForExit());
+            Task processTask = Task.Run(() => process.WaitForExit());
             Task completedTask = await Task.WhenAny(processTask, timeoutTask);
             if (completedTask == timeoutTask)
             {
                 Logs.Warning($"[SDcpp] Process timed out after {Settings.ProcessTimeoutSeconds} seconds");
-                Process.Kill();
-                return (false, outputBuilder.ToString(), "Process timed out");
+                try { process.Kill(); } catch (InvalidOperationException) { }
+                return (false, outputBuilder.ToString(), $"SD.cpp process timed out after {Settings.ProcessTimeoutSeconds} seconds. Consider increasing 'ProcessTimeoutSeconds' in backend settings.");
             }
             await Task.WhenAll(outputTask, errorTask);
-            bool success = Process.ExitCode == 0;
+            bool success = process.ExitCode == 0;
             string output = outputBuilder.ToString();
             string error = errorBuilder.ToString();
-            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
+            if (!success)
+            {
+                error = FormatProcessError(error, process.ExitCode);
+            }
+            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {process.ExitCode}");
             return (success, output, error);
         }
         catch (Exception ex)
@@ -475,8 +534,11 @@ public class SDcppProcessManager : IDisposable
         }
         finally
         {
-            Process?.Dispose();
-            Process = null;
+            if (process is not null)
+            {
+                try { if (!process.HasExited) process.Kill(); } catch { }
+                process.Dispose();
+            }
         }
     }
 
@@ -490,6 +552,7 @@ public class SDcppProcessManager : IDisposable
         if (!ValidateExecutable()) return (false, "", "SD.cpp executable validation failed");
         string commandLine = BuildCommandLine(parameters, isFluxModel);
         Logs.Info($"[SDcpp] Executing SD.cpp with command: {Settings.ExecutablePath} {commandLine}");
+        Process process = null;
         try
         {
             ProcessStartInfo processInfo = new()
@@ -512,15 +575,16 @@ public class SDcppProcessManager : IDisposable
             {
                 Logs.Debug($"[SDcpp] Executing: {Settings.ExecutablePath} {commandLine}");
             }
-            Process = Process.Start(processInfo);
-            if (Process is null) return (false, "", "Failed to start SD.cpp process");
+            process = Process.Start(processInfo);
+            if (process is null) return (false, "", "Failed to start SD.cpp process");
+            _activeProcesses.Add(process);
             StringBuilder outputBuilder = new();
             StringBuilder errorBuilder = new();
             Task outputTask = Task.Run(async () =>
             {
-                while (!Process.StandardOutput.EndOfStream)
+                while (!process.StandardOutput.EndOfStream)
                 {
-                    string line = await Process.StandardOutput.ReadLineAsync();
+                    string line = await process.StandardOutput.ReadLineAsync();
                     if (line is not null)
                     {
                         outputBuilder.AppendLine(line);
@@ -537,9 +601,9 @@ public class SDcppProcessManager : IDisposable
             });
             Task errorTask = Task.Run(async () =>
             {
-                while (!Process.StandardError.EndOfStream)
+                while (!process.StandardError.EndOfStream)
                 {
-                    string line = await Process.StandardError.ReadLineAsync();
+                    string line = await process.StandardError.ReadLineAsync();
                     if (line is not null)
                     {
                         errorBuilder.AppendLine(line);
@@ -549,20 +613,24 @@ public class SDcppProcessManager : IDisposable
                 }
             });
             Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(Settings.ProcessTimeoutSeconds));
-            Task processTask = Task.Run(() => Process.WaitForExit());
+            Task processTask = Task.Run(() => process.WaitForExit());
             Task completedTask = await Task.WhenAny(processTask, timeoutTask);
             if (completedTask == timeoutTask)
             {
                 Logs.Warning($"[SDcpp] Process timed out after {Settings.ProcessTimeoutSeconds} seconds");
-                Process.Kill();
-                return (false, outputBuilder.ToString(), "Process timed out");
+                try { process.Kill(); } catch (InvalidOperationException) { }
+                return (false, outputBuilder.ToString(), $"SD.cpp process timed out after {Settings.ProcessTimeoutSeconds} seconds. Consider increasing 'ProcessTimeoutSeconds' in backend settings.");
             }
             await Task.WhenAll(outputTask, errorTask);
             progressCallback?.Invoke(1.0f);
-            bool success = Process.ExitCode == 0;
+            bool success = process.ExitCode == 0;
             string output = outputBuilder.ToString();
             string error = errorBuilder.ToString();
-            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {Process.ExitCode}");
+            if (!success)
+            {
+                error = FormatProcessError(error, process.ExitCode);
+            }
+            if (Settings.DebugMode) Logs.Debug($"[SDcpp] Process completed with exit code: {process.ExitCode}");
             return (success, output, error);
         }
         catch (Exception ex)
@@ -572,35 +640,41 @@ public class SDcppProcessManager : IDisposable
         }
         finally
         {
-            Process?.Dispose();
-            Process = null;
-        }
-    }
-
-    /// <summary>Forcibly terminates the SD.cpp process if it's currently running. Used for cleanup during shutdown or when a process needs to be cancelled. Waits up to 5 seconds for graceful exit before forcing termination.</summary>
-    public void KillProcess()
-    {
-        try
-        {
-            if (Process is not null && !Process.HasExited)
+            if (process is not null)
             {
-                Process.Kill();
-                Process.WaitForExit(5000);
+                try { if (!process.HasExited) process.Kill(); } catch { }
+                process.Dispose();
             }
         }
-        catch (Exception ex)
+    }
+
+    /// <summary>Forcibly terminates all active SD.cpp processes. Used for cleanup during shutdown or cancellation.</summary>
+    public void KillAllProcesses()
+    {
+        while (_activeProcesses.TryTake(out Process process))
         {
-            Logs.Warning($"[SDcpp] Error killing process: {ex.Message}");
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill();
+                    process.WaitForExit(5000);
+                }
+                process.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logs.Warning($"[SDcpp] Error killing process: {ex.Message}");
+            }
         }
     }
 
-    /// <summary>Disposes the SDcppProcessManager, killing any running process and cleaning up resources.</summary>
+    /// <summary>Disposes the SDcppProcessManager, killing any running processes and cleaning up resources.</summary>
     public void Dispose()
     {
         if (!Disposed)
         {
-            KillProcess();
-            Process?.Dispose();
+            KillAllProcesses();
             Disposed = true;
             GC.SuppressFinalize(this);
         }

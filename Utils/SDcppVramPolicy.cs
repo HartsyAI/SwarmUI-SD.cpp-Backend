@@ -66,7 +66,6 @@ public class SDcppVramPolicy
 
         try
         {
-            // Get GPU VRAM info
             NvidiaUtil.NvidiaInfo[] gpus = NvidiaUtil.QueryNvidia();
             if (gpus is null || gpus.Length == 0 || gpuIndex >= gpus.Length)
             {
@@ -84,12 +83,10 @@ public class SDcppVramPolicy
 
             Logs.Debug($"[SDcpp VRAM] GPU: {gpu.GPUName}, Total: {totalVramGB:F2} GB, Free: {freeVramGB:F2} GB");
 
-            // Calculate individual component sizes for smart offloading decisions
             long diffusionSize = GetFileSize(diffusionModelPath);
             long vaeSize = GetFileSize(vaePath);
             long controlNetSize = GetFileSize(controlNetPath);
 
-            // Get individual encoder sizes
             Dictionary<string, long> encoderSizes = [];
             long totalEncoderSize = 0;
             foreach (KeyValuePair<string, string> kvp in encoderPaths ?? [])
@@ -103,13 +100,11 @@ public class SDcppVramPolicy
                       $"Encoders: {totalEncoderSize / (1024.0 * 1024.0):F1} MB, VAE: {vaeSize / (1024.0 * 1024.0):F1} MB" +
                       (controlNetSize > 0 ? $", ControlNet: {controlNetSize / (1024.0 * 1024.0):F1} MB" : ""));
 
-            // Log individual encoder sizes for debugging
             foreach (KeyValuePair<string, long> kvp in encoderSizes)
             {
                 Logs.Debug($"[SDcpp VRAM]   {kvp.Key}: {kvp.Value / (1024.0 * 1024.0):F1} MB");
             }
 
-            // Calculate resolution overhead
             int width = input.GetImageWidth();
             int height = input.GetImageHeight();
             int batchSize = input.Get(T2IParamTypes.BatchSize, 1);
@@ -118,24 +113,20 @@ public class SDcppVramPolicy
             Logs.Debug($"[SDcpp VRAM] Resolution: {width}x{height}, Batch: {batchSize}, " +
                       $"Resolution overhead: {resolutionOverhead / (1024.0 * 1024.0):F1} MB");
 
-            // Estimate total VRAM needed (without any offloading)
             long baseModelFootprint = diffusionSize + totalEncoderSize + vaeSize + controlNetSize;
             result.EstimatedVramBytes = (long)(baseModelFootprint * RuntimeFactor) + resolutionOverhead;
 
             double estimatedVramGB = result.EstimatedVramBytes / (1024.0 * 1024.0 * 1024.0);
             Logs.Debug($"[SDcpp VRAM] Estimated VRAM needed: {estimatedVramGB:F2} GB");
 
-            // Calculate available VRAM with safety margin
             long availableVram = (long)(result.FreeVramBytes * SafetyMargin);
 
-            // Calculate fit ratio
             result.FitRatio = availableVram > 0
                 ? (double)result.EstimatedVramBytes / availableVram
                 : double.MaxValue;
 
             Logs.Debug($"[SDcpp VRAM] Fit ratio: {result.FitRatio:F3}");
 
-            // Determine flags using smart incremental approach
             DetermineFlagsIncremental(result, totalVramGB, availableVram, diffusionSize,
                 vaeSize, encoderSizes, controlNetSize, resolutionOverhead);
 
@@ -160,7 +151,6 @@ public class SDcppVramPolicy
     public static PolicyResult Evaluate(T2IParamInput input, string diffusionModelPath,
         IEnumerable<string> encoderPaths, string vaePath = null, int gpuIndex = 0)
     {
-        // Convert to dictionary with generic keys
         Dictionary<string, string> encoderDict = [];
         int i = 0;
         foreach (string path in encoderPaths ?? [])
@@ -191,11 +181,9 @@ public class SDcppVramPolicy
     private static long CalculateResolutionOverhead(int width, int height, int batchSize)
     {
         // Latent space is 1/8 of pixel space, 4 channels, fp16 = 2 bytes
-        // Plus activation memory which scales with resolution
         long latentSize = (width / 8) * (height / 8) * 4 * 2 * batchSize;
-        
-        // Activation memory is roughly proportional to resolution
-        // Estimate ~100MB per megapixel for activations
+
+        // ~100MB per megapixel for activations
         double megapixels = (width * height) / (1024.0 * 1024.0);
         long activationSize = (long)(megapixels * 100 * 1024 * 1024) * batchSize;
 
@@ -207,7 +195,6 @@ public class SDcppVramPolicy
     private static void DetermineFlagsIncremental(PolicyResult result, double totalVramGB, long availableVram,
         long diffusionSize, long vaeSize, Dictionary<string, long> encoderSizes, long controlNetSize, long resolutionOverhead)
     {
-        // If very low VRAM GPU, always be aggressive
         if (totalVramGB < AggressiveThresholdGB)
         {
             result.VaeTiling = true;
@@ -223,14 +210,12 @@ public class SDcppVramPolicy
             return;
         }
 
-        // Calculate current VRAM usage estimate
         long currentEstimate = (long)((diffusionSize + vaeSize + controlNetSize) * RuntimeFactor) + resolutionOverhead;
         foreach (long size in encoderSizes.Values)
         {
             currentEstimate += (long)(size * RuntimeFactor);
         }
 
-        // If it fits comfortably, no flags needed
         if (currentEstimate <= availableVram)
         {
             result.Decision = "fits_no_offload";
@@ -238,10 +223,7 @@ public class SDcppVramPolicy
             return;
         }
 
-        // Build list of available VRAM-saving options, sorted by efficiency (savings per performance cost)
         List<VramSavingOption> options = BuildVramSavingOptions(diffusionSize, vaeSize, encoderSizes, controlNetSize, resolutionOverhead);
-
-        // Sort by efficiency: highest savings per performance impact first
         options = [.. options.OrderByDescending(o => o.EstimatedSavingsBytes / (double)o.PerformanceImpact)];
 
         long vramDeficit = currentEstimate - availableVram;
@@ -250,17 +232,14 @@ public class SDcppVramPolicy
 
         Logs.Debug($"[SDcpp VRAM] Need to save {vramDeficit / (1024.0 * 1024.0):F1} MB to fit in VRAM");
 
-        // Apply flags incrementally until we fit
         foreach (VramSavingOption option in options)
         {
             if (option.IsAlreadyApplied(result))
                 continue;
 
-            // Check if this option would help
             if (option.EstimatedSavingsBytes <= 0)
                 continue;
 
-            // Apply the flag
             option.ApplyFlag(result);
             totalSavings += option.EstimatedSavingsBytes;
             appliedOptions.Add(option.Name);
@@ -268,7 +247,6 @@ public class SDcppVramPolicy
 
             Logs.Debug($"[SDcpp VRAM] Applied {option.Name}: saves ~{option.EstimatedSavingsBytes / (1024.0 * 1024.0):F1} MB (impact: {option.PerformanceImpact})");
 
-            // Check if we've saved enough
             if (totalSavings >= vramDeficit)
             {
                 result.Decision = "incremental_fit";
@@ -279,7 +257,7 @@ public class SDcppVramPolicy
             }
         }
 
-        // If we've applied all flags and still don't fit, note it but proceed anyway
+        // Applied all flags but still may not fit — proceed anyway as best effort
         if (totalSavings < vramDeficit)
         {
             result.Decision = "best_effort";
@@ -296,10 +274,8 @@ public class SDcppVramPolicy
     {
         List<VramSavingOption> options = [];
 
-        // VAE Tiling - reduces peak VRAM during VAE decode, minimal performance impact
-        // Savings: Reduces peak VAE memory from ~4x to ~1.5x of VAE size during decode
-        // This mainly helps with resolution overhead during decode phase
-        long vaeTilingSavings = (long)(resolutionOverhead * 0.6); // ~60% reduction in resolution overhead during VAE
+        // VAE Tiling — reduces peak VRAM during VAE decode (~60% of resolution overhead)
+        long vaeTilingSavings = (long)(resolutionOverhead * 0.6);
         if (vaeTilingSavings > 50 * 1024 * 1024) // Only worth it if saving >50MB
         {
             options.Add(new VramSavingOption
@@ -307,14 +283,13 @@ public class SDcppVramPolicy
                 Name = "VAE Tiling",
                 FlagName = "vae_tiling",
                 EstimatedSavingsBytes = vaeTilingSavings,
-                PerformanceImpact = 1, // Minimal impact
+                PerformanceImpact = 1,
                 ApplyFlag = r => r.VaeTiling = true,
                 IsAlreadyApplied = r => r.VaeTiling
             });
         }
 
-        // VAE on CPU - offloads entire VAE to CPU
-        // Savings: Full VAE size * runtime factor
+        // VAE on CPU — offloads entire VAE decode to system RAM
         if (vaeSize > 0)
         {
             options.Add(new VramSavingOption
@@ -322,14 +297,13 @@ public class SDcppVramPolicy
                 Name = "VAE on CPU",
                 FlagName = "vae_on_cpu",
                 EstimatedSavingsBytes = (long)(vaeSize * RuntimeFactor),
-                PerformanceImpact = 2, // Moderate impact - VAE runs at end anyway
+                PerformanceImpact = 2,
                 ApplyFlag = r => r.VaeOnCpu = true,
                 IsAlreadyApplied = r => r.VaeOnCpu
             });
         }
 
-        // CLIP on CPU - offloads CLIP encoders (clip_l, clip_g) to CPU
-        // Only applies to CLIP models, not T5/LLM which stay on GPU
+        // CLIP on CPU — offloads CLIP encoders (clip_l, clip_g) but not T5/LLM
         long clipSize = 0;
         foreach (KeyValuePair<string, long> kvp in encoderSizes)
         {
@@ -345,13 +319,12 @@ public class SDcppVramPolicy
                 Name = "CLIP on CPU",
                 FlagName = "clip_on_cpu",
                 EstimatedSavingsBytes = (long)(clipSize * RuntimeFactor),
-                PerformanceImpact = 2, // Moderate - encoding happens once at start
+                PerformanceImpact = 2,
                 ApplyFlag = r => r.ClipOnCpu = true,
                 IsAlreadyApplied = r => r.ClipOnCpu
             });
         }
 
-        // ControlNet on CPU - offloads ControlNet to CPU
         if (controlNetSize > 0)
         {
             options.Add(new VramSavingOption
@@ -359,23 +332,21 @@ public class SDcppVramPolicy
                 Name = "ControlNet on CPU",
                 FlagName = "control_net_cpu",
                 EstimatedSavingsBytes = (long)(controlNetSize * RuntimeFactor),
-                PerformanceImpact = 3, // Significant - ControlNet runs every step
+                PerformanceImpact = 3,
                 ApplyFlag = r => r.ControlNetOnCpu = true,
                 IsAlreadyApplied = r => r.ControlNetOnCpu
             });
         }
 
-        // Offload to CPU - keeps diffusion model weights in RAM, loads to VRAM per step
-        // This is the nuclear option - significant performance impact but saves the most VRAM
-        // Savings: Most of diffusion model size (kept in RAM, streamed as needed)
+        // Diffusion offload — nuclear option, keeps weights in RAM and streams per step
         if (diffusionSize > 0)
         {
             options.Add(new VramSavingOption
             {
                 Name = "Diffusion Offload to CPU",
                 FlagName = "offload_to_cpu",
-                EstimatedSavingsBytes = (long)(diffusionSize * 0.7), // ~70% savings (some layers still need to be in VRAM)
-                PerformanceImpact = 4, // Severe - memory transfers every step
+                EstimatedSavingsBytes = (long)(diffusionSize * 0.7), // ~70% savings (some layers stay in VRAM)
+                PerformanceImpact = 4,
                 ApplyFlag = r => r.OffloadToCpu = true,
                 IsAlreadyApplied = r => r.OffloadToCpu
             });
@@ -391,12 +362,11 @@ public class SDcppVramPolicy
     public static void ApplyToParameters(Dictionary<string, object> parameters, PolicyResult policyResult,
         bool respectUserOverrides = true)
     {
-        // Apply flags, respecting user overrides if requested
         void SetFlag(string key, bool policyValue)
         {
             if (respectUserOverrides && parameters.TryGetValue(key, out object existing) && existing is bool userValue)
             {
-                // User explicitly set this flag - keep their value if it's MORE aggressive
+                // Keep user's value if it's MORE aggressive than policy
                 if (userValue || !policyValue)
                 {
                     return;
@@ -411,7 +381,6 @@ public class SDcppVramPolicy
         SetFlag("offload_to_cpu", policyResult.OffloadToCpu);
         SetFlag("control_net_cpu", policyResult.ControlNetOnCpu);
 
-        // Log what was applied
         if (policyResult.AppliedFlags.Count > 0)
         {
             Logs.Info($"[SDcpp VRAM] Applied flags: {string.Join(", ", policyResult.AppliedFlags)}");

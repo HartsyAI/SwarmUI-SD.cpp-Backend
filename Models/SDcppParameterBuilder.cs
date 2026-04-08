@@ -24,7 +24,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     {
         Dictionary<string, object> parameters = [];
 
-        // Use SDcppModelManager helpers for architecture detection
         bool isFluxBased = SDcppModelManager.IsFluxBased(architecture);
         bool isSD3Model = architecture is "sd3" or "sd3.5";
         bool isZImageModel = architecture is "z-image";
@@ -34,49 +33,29 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         bool requiresQwenLLM = SDcppModelManager.RequiresQwenLLM(architecture);
         bool isDistilled = SDcppModelManager.IsDistilledModel(architecture);
 
-        // Add performance and processing parameters
         AddPerformanceParameters(parameters, input);
-
-        // Add basic generation parameters
         AddBasicParameters(parameters, input, isFluxBased, isDistilled);
-
-        // Advanced sampling overrides
         AddAdvancedSamplingParameters(parameters, input);
-
-        // Add model and components based on architecture
         AddModelComponents(parameters, input, isFluxBased, isSD3Model, isZImageModel, isQwenImageModel, requiresQwenLLM);
-
-        // Model addon overrides (advanced component/path controls)
         AddModelAddonOverrides(parameters, input);
 
-        // Add image edit parameters if applicable
         if (isImageEditModel)
         {
             AddImageEditParameters(parameters, input, outputDir);
         }
 
-        // Add image parameters (init image, mask, controlnet)
         AddImageParameters(parameters, input, outputDir);
-
-        // VAE tiling extra controls
         AddVRAMTilingExtras(parameters, input);
-
-        // Add advanced parameters (TAESD, upscaling, color)
         AddAdvancedParameters(parameters, input);
-
-        // Preview overrides (per-job)
         AddPreviewOverrides(parameters, input);
 
-        // Add video parameters if applicable
         if (isVideoModel)
         {
             AddVideoParameters(parameters, input, outputDir);
         }
 
-        // Apply VRAM policy based on mode
         ApplyVramPolicy(parameters, input);
 
-        // Set output path (video uses different format)
         if (isVideoModel)
         {
             parameters["output"] = Path.Combine(outputDir, "generated_%03d.mp4");
@@ -96,14 +75,12 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     {
         string mode = (VramPolicyMode ?? "auto").ToLowerInvariant();
 
-        // Disabled mode: skip all automatic VRAM policy, let user control via manual parameters
         if (mode == "disabled")
         {
             Logs.Debug("[SDcpp VRAM] Policy disabled - skipping automatic VRAM optimization");
             return;
         }
 
-        // Offload mode: force all memory-saving flags on (ignore smart detection)
         if (mode == "offload")
         {
             Logs.Debug("[SDcpp VRAM] Policy set to 'Always Offload' - enabling all memory-saving flags");
@@ -115,8 +92,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             return;
         }
 
-        // Auto mode: use smart VRAM policy based on actual model sizes
-        // Extract model paths from parameters
         string diffusionPath = null;
         Dictionary<string, string> encoderPaths = [];
         string vaePath = null;
@@ -131,7 +106,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             diffusionPath = modelObj?.ToString();
         }
 
-        // Build encoder paths dictionary with proper keys for VRAM savings calculation
         if (parameters.TryGetValue("clip_l", out object clipL) && !string.IsNullOrEmpty(clipL?.ToString()))
         {
             encoderPaths["clip_l"] = clipL.ToString();
@@ -159,7 +133,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             controlNetPath = cnObj?.ToString();
         }
 
-        // Evaluate VRAM policy with detailed component information
         SDcppVramPolicy.PolicyResult policy = SDcppVramPolicy.Evaluate(
             input,
             diffusionPath,
@@ -169,25 +142,22 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             GpuIndex
         );
 
-        // Apply policy to parameters (respects user overrides if they're more aggressive)
         SDcppVramPolicy.ApplyToParameters(parameters, policy, respectUserOverrides: true);
     }
 
     public void AddPerformanceParameters(Dictionary<string, object> parameters, T2IParamInput input)
     {
-        // Memory mapping for faster model loading (not VRAM-related)
+        // Memory mapping speeds up model loading (not VRAM-related)
         if (SDcppExtension.MemoryMapParam is not null)
         {
             parameters["mmap"] = input.Get(SDcppExtension.MemoryMapParam, true, autoFixDefault: true);
         }
 
-        // VAE direct convolution for faster decoding
         if (SDcppExtension.VAEConvDirectParam is not null)
         {
             parameters["vae_conv_direct"] = input.Get(SDcppExtension.VAEConvDirectParam, true, autoFixDefault: true);
         }
 
-        // Store user's explicit VRAM preferences (VRAM policy will respect these if more aggressive)
         if (SDcppExtension.VAETilingParam is not null && input.TryGet(SDcppExtension.VAETilingParam, out bool userVaeTiling))
         {
             parameters["vae_tiling"] = userVaeTiling;
@@ -211,7 +181,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["control_net_cpu"] = input.Get(SDcppExtension.ControlNetOnCPUParam, false, autoFixDefault: true);
         }
 
-        // Architecture-specific caching for performance
         bool isFluxBased = SDcppModelManager.IsFluxBased(architecture);
         bool isSD3 = architecture is "sd3" or "sd3.5";
         bool isQwenImage = architecture is "qwen-image" or "qwen-image-edit";
@@ -230,7 +199,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             }
         }
 
-        // Auto caching behavior (only if user didn't override cache mode)
         if (!cacheModeOverridden)
         {
             if (isUNet)
@@ -265,7 +233,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["scm_policy"] = scmPolicyRaw.Trim();
         }
 
-        // Performance optimizations
         if (SDcppExtension.FlashAttentionParam is not null)
         {
             parameters["flash_attention"] = input.Get(SDcppExtension.FlashAttentionParam, true, autoFixDefault: true);
@@ -283,8 +250,8 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["diffusion_conv_direct"] = true;
         }
 
-        // Note: VRAM offload flags (vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu)
-        // are now handled dynamically by ApplyVramPolicy() which runs after model paths are known.
+        // VRAM offload flags (vae_tiling, clip_on_cpu, vae_on_cpu, offload_to_cpu)
+        // are handled dynamically by ApplyVramPolicy() which runs after model paths are known.
     }
 
     public void AddAdvancedSamplingParameters(Dictionary<string, object> parameters, T2IParamInput input)
@@ -348,7 +315,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         if (input.TryGet(T2IParamTypes.NegativePrompt, out string negPrompt))
         {
-            // Flux-based models don't use negative prompts effectively
             if (!isFluxBased)
             {
                 parameters["negative_prompt"] = negPrompt;
@@ -361,7 +327,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         if (input.TryGet(T2IParamTypes.Width, out int width)) parameters["width"] = width;
         if (input.TryGet(T2IParamTypes.Height, out int height)) parameters["height"] = height;
 
-        // Handle steps with architecture-aware defaults
         int recommendedMinSteps = SDcppModelManager.GetRecommendedMinSteps(architecture);
         if (input.TryGet(T2IParamTypes.Steps, out int steps))
         {
@@ -377,7 +342,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             parameters["steps"] = steps;
         }
 
-        // Handle CFG scale with architecture-aware recommendations
         double recommendedCFG = SDcppModelManager.GetRecommendedCFG(architecture);
         if (input.TryGet(T2IParamTypes.CFGScale, out double cfgScale))
         {
@@ -390,7 +354,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
 
         if (input.TryGet(T2IParamTypes.Seed, out long seed)) parameters["seed"] = seed;
 
-        // Handle sampler selection
         string defaultSampler = isFluxBased ? "euler" : "euler_a";
         string sampler = defaultSampler;
         if (SDcppExtension.SamplerParam is not null && input.TryGet(SDcppExtension.SamplerParam, out string userSampler))
@@ -416,10 +379,9 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 parameters["clip_skip"] = clipSkip;
             }
         }
-        // NOTE: SwarmUI handles 'Images' and 'Batch Size' at a higher level by issuing multiple backend jobs.
-        // This backend should generate 1 image per job to preserve per-image previews and sequential behavior.
+        // SwarmUI handles 'Images' and 'Batch Size' at a higher level by issuing multiple backend jobs.
+        // This backend generates 1 image per job to preserve per-image previews and sequential behavior.
 
-        // Flux guidance scale (applies to all Flux-based models)
         if (isFluxBased && input.TryGet(T2IParamTypes.FluxGuidanceScale, out double fluxGuidance))
         {
             parameters["guidance"] = fluxGuidance;
@@ -445,10 +407,9 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         {
             parameters["diffusion_model"] = mainModel.RawFilePath;
 
-            // Add VAE based on architecture
             if (isAnyFlux2)
             {
-                // All Flux 2 variants (Dev, Klein 4B, Klein 9B) use 32-channel VAE, NOT the Flux 1 VAE
+                // All Flux 2 variants use 32-channel VAE, NOT the Flux 1 VAE
                 AddFlux2VAE(parameters, input);
             }
             else
@@ -458,7 +419,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 AddVAE(parameters, input, needsFluxVAE, isZImageModel);
             }
 
-            // Add text encoders based on architecture
             if (isSD3Model)
             {
                 // SD3 needs CLIP-G, CLIP-L, and T5-XXL
@@ -478,7 +438,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             }
             else if (isFlux2Dev)
             {
-                // Flux 2 Dev uses Mistral LLM - route through generic Qwen for now
+                // Flux 2 Dev uses Mistral LLM — route through generic Qwen for now
                 // TODO: Add dedicated AddMistralLLM when SD.cpp Flux 2 Dev support is confirmed
                 AddQwenLLM(parameters, input);
                 Logs.Warning("[SDcpp] Flux 2 Dev text encoder support is experimental. Flux 2 Klein models are recommended.");
@@ -501,11 +461,9 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             }
             else if (isQwenImageModel)
             {
-                // Qwen Image models use Qwen LLM
                 AddQwenLLM(parameters, input);
             }
 
-            // Some architectures may need additional LLM components
             if (requiresQwenLLM && !parameters.ContainsKey("llm"))
             {
                 AddQwenLLM(parameters, input);
@@ -561,7 +519,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             return;
         }
         T2IModelHandler vaeModelSet = Program.T2IModelSets["VAE"];
-        // Match any Flux 2 VAE variant: flux2-vae.safetensors (Comfy-Org name) or flux2_ae.safetensors (BFL name)
+        // Match any Flux 2 VAE variant: flux2-vae.safetensors (Comfy-Org) or flux2_ae.safetensors (BFL)
         T2IModel flux2Vae = vaeModelSet.Models.Values.FirstOrDefault(m =>
             m.Name.Contains("flux2", StringComparison.OrdinalIgnoreCase) &&
             (m.Name.Contains("vae", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("ae", StringComparison.OrdinalIgnoreCase)));
@@ -572,7 +530,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         else
         {
-            // Use the same non-gated Comfy-Org mirror that SwarmUI's CommonModels registry uses
+            // Non-gated Comfy-Org mirror (same as SwarmUI's CommonModels registry)
             Logs.Info("[SDcpp] Flux 2 VAE not found, auto-downloading from Comfy-Org mirror...");
             string vaePath = SDcppModelManager.EnsureModelExists("VAE", "Flux/flux2-vae.safetensors",
                 "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
@@ -683,7 +641,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         // SD.cpp requires full-precision (BF16) Qwen models. SwarmUI's ComfyUI backend downloads
         // qwen_3_4b_fp8_mixed.safetensors and saves it as "qwen_3_4b.safetensors", which SD.cpp
         // can't parse (results in wrong tensor shapes). We use a distinct filename to avoid conflicts.
-        // First: look for our previously downloaded BF16 version
         T2IModel bf16Qwen = clipModelSet.Models.Values.FirstOrDefault(m =>
             m.Name.Contains("qwen_3_4b_bf16", StringComparison.OrdinalIgnoreCase));
         if (bf16Qwen is not null)
@@ -692,7 +649,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             Logs.Debug($"[SDcpp] Using existing Qwen 3 4B (BF16): {bf16Qwen.Name}");
             return;
         }
-        // Second: check if existing qwen_3_4b is the full-precision version (~8GB, not fp8 ~5.6GB)
+        // Check if existing qwen_3_4b is full-precision (~8GB, not fp8 ~5.6GB)
         T2IModel existingQwen = clipModelSet.Models.Values.FirstOrDefault(m =>
             (m.Name.Contains("qwen_3_4b", StringComparison.OrdinalIgnoreCase) ||
              m.Name.Contains("qwen3_4b", StringComparison.OrdinalIgnoreCase) ||
@@ -717,7 +674,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
                 Logs.Warning($"[SDcpp] Could not check file size of {existingQwen.Name}: {ex.Message}");
             }
         }
-        // Download full-precision BF16 version with distinct filename to avoid conflicts with ComfyUI's fp8 version
+        // Download full-precision BF16 with distinct filename to avoid conflicts with ComfyUI's fp8 version
         Logs.Info("[SDcpp] Qwen 3 4B (BF16) not found, auto-downloading full-precision version for SD.cpp...");
         string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_4b_bf16.safetensors",
             "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
@@ -737,7 +694,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             return;
         }
         T2IModelHandler clipModelSet = Program.T2IModelSets["Clip"];
-        // Look for existing Qwen 3 8B model
         T2IModel existingQwen8B = clipModelSet.Models.Values.FirstOrDefault(m =>
             m.Name.Contains("qwen_3_8b", StringComparison.OrdinalIgnoreCase) ||
             m.Name.Contains("qwen3_8b", StringComparison.OrdinalIgnoreCase) ||
@@ -748,7 +704,6 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             Logs.Debug($"[SDcpp] Using existing Qwen 3 8B model: {existingQwen8B.Name}");
             return;
         }
-        // Download Qwen 3 8B for Flux 2 Klein 9B
         Logs.Info("[SDcpp] Qwen 3 8B not found, auto-downloading for Flux 2 Klein 9B...");
         string qwenPath = SDcppModelManager.EnsureModelExists("Clip", "qwen_3_8b.safetensors",
             "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp4mixed.safetensors",
@@ -850,21 +805,18 @@ public class SDcppParameterBuilder(string modelName, string architecture)
     /// <summary>Adds parameters for image editing models (Flux Kontext, Qwen Image Edit).</summary>
     public void AddImageEditParameters(Dictionary<string, object> parameters, T2IParamInput input, string outputDir)
     {
-        // Image edit models require an input image
         if (!input.TryGet(T2IParamTypes.InitImage, out Image editImage) || editImage is null)
         {
             Logs.Warning($"[SDcpp] {architecture} is an image edit model but no input image was provided");
             return;
         }
 
-        // For Flux Kontext, the input image is used as reference
         if (architecture is "flux-kontext")
         {
             string editImagePath = Path.Combine(outputDir, "edit_input.png");
             File.WriteAllBytes(editImagePath, editImage.RawData);
             parameters["init_img"] = editImagePath;
-            
-            // Kontext uses strength to control how much to preserve from original
+
             if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
             {
                 parameters["strength"] = strength;
@@ -880,7 +832,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
             string editImagePath = Path.Combine(outputDir, "edit_input.png");
             File.WriteAllBytes(editImagePath, editImage.RawData);
             parameters["init_img"] = editImagePath;
-            
+
             if (input.TryGet(T2IParamTypes.InitImageCreativity, out double strength))
             {
                 parameters["strength"] = strength;

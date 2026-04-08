@@ -151,10 +151,10 @@ public class SDcppExtension : Extension
                 "false", IgnoreIf: "false", Toggleable: true, FeatureFlag: "sdcpp", Group: vramGroup, OrderPriority: 9, IsAdvanced: true));
             SamplerParam = T2IParamTypes.Register<string>(new("SD.cpp Sampler", "Sampling method for SD.cpp backend. Euler is recommended for Flux, euler_a for SD/SDXL.",
                 "euler", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.GroupSampling, OrderPriority: -5,
-                GetValues: (_) => ["euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "ipndm_v", "lcm", "tcd"]));
+                GetValues: (_) => ["euler", "euler_a", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "ipndm_v", "lcm", "ddim_trailing", "tcd", "res_multistep", "res_2s"]));
             SchedulerParam = T2IParamTypes.Register<string>(new("SD.cpp Scheduler", "Scheduler type for SD.cpp backend. Karras is popular for quality. Goes with the Sampler parameter. Leave empty to use SD.cpp's default scheduler.",
                 "", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.GroupSampling, OrderPriority: -4, IgnoreIf: "",
-                GetValues: (_) =>["discrete", "karras", "exponential", "ays", "gits"]));
+                GetValues: (_) => ["discrete", "karras", "exponential", "ays", "gits", "sgm_uniform", "simple", "smoothstep", "kl_optimal", "lcm", "bong_tangent"]));
             TAESDParam = T2IParamTypes.Register<T2IModel>(new("TAESD Preview Decoder", "Tiny AutoEncoder for fast preview decoding. Use for quick previews during generation (lower quality but much faster).",
                 "(None)", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.GroupAdvancedModelAddons, Subtype: "VAE", OrderPriority: 79, IsAdvanced: true));
             UpscaleModelParam = T2IParamTypes.Register<T2IModel>(new("ESRGAN Upscale Model", "ESRGAN model for upscaling generated images. Currently supports RealESRGAN_x4plus_anime_6B and similar models.",
@@ -172,7 +172,7 @@ public class SDcppExtension : Extension
                 "true", Group: T2IParamTypes.GroupAdvancedSampling, FeatureFlag: "sdcpp", OrderPriority: 31, Toggleable: true, IsAdvanced: true));
             CacheModeParam = T2IParamTypes.Register<string>(new("Cache Mode", "Selects SD.cpp's caching strategy (`--cache-mode`).\nCaching can dramatically speed up repeated generations, but may reduce quality depending on mode/options.\nUse 'auto' to let the backend choose a reasonable cache mode based on the model type.",
                 "auto", Toggleable: true, FeatureFlag: "sdcpp", Group: performanceGroup, OrderPriority: 10, IgnoreIf: "auto",
-                GetValues: (_) => ["auto", "disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit"]));
+                GetValues: (_) => ["auto", "disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache-dit", "spectrum"]));
             CachePresetParam = T2IParamTypes.Register<string>(new("Cache Preset", "Preset for cache-dit caching (`--cache-preset`).\nOnly applies when Cache Mode is set to 'cache-dit'.",
                 "ultra", Toggleable: true, FeatureFlag: "sdcpp", Group: performanceGroup, OrderPriority: 11, IgnoreIf: "ultra", IsAdvanced: true, DependNonDefault: CacheModeParam.Type.ID,
                 GetValues: (_) => ["slow", "medium", "fast", "ultra"]));
@@ -248,8 +248,6 @@ public class SDcppExtension : Extension
             TAESDPreviewOnlyParam = T2IParamTypes.Register<bool>(new("TAESD Preview Only", "Prevents using TAESD for the final image decode (`--taesd-preview-only`).\nTAESD will still be used for previews, but final decode uses the normal VAE.",
                 "false", IgnoreIf: "false", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 63, IsAdvanced: true, DependNonDefault: PreviewMethodOverrideParam.Type.ID));
 
-            // ControlNet extra: SD.cpp-side Canny preprocessor
-            // Place in the first ControlNet group to match Swarm's ControlNet UI patterns.
             CannyPreprocessorParam = T2IParamTypes.Register<bool>(new("ControlNet Canny Preprocessor", "Applies SD.cpp's built-in Canny edge preprocessor (`--canny`).\nThis affects how the ControlNet input image is processed before being fed into ControlNet.\nOnly enable this if your ControlNet model expects a Canny-style conditioning image.",
                 "false", IgnoreIf: "false", Toggleable: true, FeatureFlag: "sdcpp", Group: T2IParamTypes.Controlnets[0].Group, OrderPriority: 5, IsAdvanced: true));
 

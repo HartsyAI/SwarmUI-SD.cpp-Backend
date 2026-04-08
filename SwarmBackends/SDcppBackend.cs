@@ -54,8 +54,8 @@ public class SDcppBackend : AbstractT2IBackend
         [ConfigComment("Which GPU to use, if multiple are available.\nShould be a single number, like '0'.")]
         public int GPU_ID = 0;
 
-        [ConfigComment("How many extra requests may queue up on this backend while one is processing.\n0 means only a single live gen, 1 means a live gen and an extra waiting.")]
-        public int OverQueue = 1;
+        [ConfigComment("How many extra requests may queue up on this backend while one is processing.\n0 means only a single live gen (recommended for single-GPU setups).\n1 means a live gen and an extra waiting.\nSD.cpp launches a separate process per generation, so values above 0 on a single GPU may cause VRAM contention.")]
+        public int OverQueue = 0;
 
         [ConfigComment("VRAM management policy for automatic memory optimization.\n'Auto' intelligently applies offload flags based on model size and available VRAM.\n'Always Offload' forces all memory-saving flags on (slower but uses less VRAM).\n'Disabled' never auto-applies flags (you control everything via manual parameters).")]
         [ManualSettingsOptions(Impl = null, Vals = ["auto", "offload", "disabled"], ManualNames = ["Auto", "Always Offload", "Disabled (Recommended)"])]
@@ -472,7 +472,7 @@ public class SDcppBackend : AbstractT2IBackend
     public static async Task<Image[]> CollectGeneratedImages(string outputDir, T2IParamInput input)
     {
         List<Image> images = [];
-        string[] imageFiles = [.. Directory.GetFiles(outputDir, "*.png"), .. Directory.GetFiles(outputDir, "*.jpg"), .. Directory.GetFiles(outputDir, "*.jpeg")];
+        string[] imageFiles = [.. Directory.GetFiles(outputDir, "*.png"), .. Directory.GetFiles(outputDir, "*.jpg"), .. Directory.GetFiles(outputDir, "*.jpeg"), .. Directory.GetFiles(outputDir, "*.webp")];
         imageFiles = [.. imageFiles.Where(path =>
         {
             string fileName = Path.GetFileName(path);
@@ -500,6 +500,7 @@ public class SDcppBackend : AbstractT2IBackend
                 {
                     ".png" => MediaType.ImagePng,
                     ".jpg" or ".jpeg" => MediaType.ImageJpg,
+                    ".webp" => MediaType.ImageWebp,
                     _ => MediaType.ImagePng
                 };
                 images.Add(new Image(imageData, mediaType));

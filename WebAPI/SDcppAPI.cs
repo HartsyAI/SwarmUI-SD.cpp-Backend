@@ -1,10 +1,14 @@
 using Hartsy.Extensions.SDcppExtension.SwarmBackends;
+using Hartsy.Extensions.SDcppExtension.Utils;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Backends;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 
 namespace Hartsy.Extensions.SDcppExtension.WebAPI;
 
@@ -22,6 +26,7 @@ public static class SDcppAPI
             API.RegisterAPICall(GetBackendStatus, false, PermReadBackendInfo);
             API.RegisterAPICall(ListSDcppModels, false, PermReadBackendInfo);
             API.RegisterAPICall(GetSDcppSettings, false, PermReadBackendInfo);
+            API.RegisterAPICall(InspectImageMetadata, false, PermReadBackendInfo);
             Logs.Info("[SDcpp] API endpoints registered successfully");
         }
         catch (Exception ex)
@@ -91,6 +96,98 @@ public static class SDcppAPI
         {
             Logs.Error($"[SDcpp] Error listing models: {ex.Message}");
             return SDcppExtension.CreateErrorResponse("Failed to list models", "LIST_MODELS_ERROR", ex);
+        }
+    }
+
+    /// <summary>Uses SD.cpp's metadata inspection mode to extract generation metadata from an image file.
+    /// Runs `sd -M metadata --image &lt;path&gt; --metadata-format json` and returns the parsed result.</summary>
+    public static async Task<JObject> InspectImageMetadata(Session session, string imagePath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(imagePath))
+            {
+                return SDcppExtension.CreateErrorResponse("Image path is required.", "MISSING_PATH");
+            }
+            if (!Path.IsPathRooted(imagePath))
+            {
+                imagePath = Path.Combine(session.User.OutputDirectory, imagePath);
+            }
+            if (!File.Exists(imagePath))
+            {
+                return SDcppExtension.CreateErrorResponse($"Image file not found: {imagePath}", "FILE_NOT_FOUND");
+            }
+            SDcppBackend backend = Program.Backends.RunningBackendsOfType<SDcppBackend>().FirstOrDefault();
+            if (backend?.ProcessManager is null)
+            {
+                return SDcppExtension.CreateErrorResponse("No running SD.cpp backend available.", "NO_BACKEND");
+            }
+            string exe = backend.Settings.ExecutablePath;
+            if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
+            {
+                return SDcppExtension.CreateErrorResponse("SD.cpp executable not found.", "NO_EXECUTABLE");
+            }
+            ProcessStartInfo psi = new()
+            {
+                FileName = exe,
+                Arguments = $"-M metadata --image \"{imagePath}\" --metadata-format json",
+                WorkingDirectory = Path.GetDirectoryName(exe),
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            using Process process = Process.Start(psi);
+            if (process is null)
+            {
+                return SDcppExtension.CreateErrorResponse("Failed to start SD.cpp metadata process.", "PROCESS_FAILED");
+            }
+            StringBuilder stdout = new();
+            StringBuilder stderr = new();
+            Task outTask = Task.Run(async () =>
+            {
+                while (!process.StandardOutput.EndOfStream)
+                {
+                    string line = await process.StandardOutput.ReadLineAsync();
+                    if (line is not null) stdout.AppendLine(line);
+                }
+            });
+            Task errTask = Task.Run(async () =>
+            {
+                while (!process.StandardError.EndOfStream)
+                {
+                    string line = await process.StandardError.ReadLineAsync();
+                    if (line is not null) stderr.AppendLine(line);
+                }
+            });
+            bool exited = process.WaitForExit(30000);
+            if (!exited)
+            {
+                try { process.Kill(); } catch { }
+                return SDcppExtension.CreateErrorResponse("Metadata inspection timed out.", "TIMEOUT");
+            }
+            await Task.WhenAll(outTask, errTask);
+            string output = stdout.ToString().Trim();
+            if (process.ExitCode != 0 || string.IsNullOrEmpty(output))
+            {
+                string errMsg = stderr.ToString().Trim();
+                return SDcppExtension.CreateErrorResponse($"SD.cpp metadata inspection failed: {(string.IsNullOrEmpty(errMsg) ? "no output" : errMsg)}", "INSPECT_FAILED");
+            }
+            try
+            {
+                JObject metadata = JObject.Parse(output);
+                return SDcppExtension.CreateSuccessResponse(new JObject { ["metadata"] = metadata, ["image_path"] = imagePath });
+            }
+            catch
+            {
+                // Output wasn't valid JSON — return as raw text
+                return SDcppExtension.CreateSuccessResponse(new JObject { ["metadata_raw"] = output, ["image_path"] = imagePath });
+            }
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"[SDcpp] Error inspecting metadata: {ex.Message}");
+            return SDcppExtension.CreateErrorResponse("Failed to inspect image metadata", "METADATA_ERROR", ex);
         }
     }
 
