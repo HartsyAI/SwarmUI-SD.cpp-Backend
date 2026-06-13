@@ -492,7 +492,7 @@ public class SDcppParameterBuilder(string modelName, string architecture)
         }
         if (!isFluxModel && !isZImageModel) return;
         T2IModelHandler vaeModelSet = Program.T2IModelSets["VAE"];
-        T2IModel defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => m.Name.Equals("ae.safetensors", StringComparison.OrdinalIgnoreCase) || m.Name.EndsWith("ae.safetensors", StringComparison.OrdinalIgnoreCase) ||
+        T2IModel defaultVae = vaeModelSet.Models.Values.FirstOrDefault(m => m.Name.Equals("ae.safetensors", StringComparison.OrdinalIgnoreCase) || m.Name.EndsWith("/ae.safetensors", StringComparison.OrdinalIgnoreCase) ||
             (m.Name.Contains("flux", StringComparison.OrdinalIgnoreCase) && m.Name.Contains("ae", StringComparison.OrdinalIgnoreCase)));
         if (defaultVae is not null)
         {
