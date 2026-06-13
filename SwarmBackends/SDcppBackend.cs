@@ -82,7 +82,7 @@ public class SDcppBackend : AbstractT2IBackend
     {
         get
         {
-            List<string> features = ["sdcpp", "txt2img", "img2img", "inpainting", "negative_prompt", "batch_generation", "vae_tiling", "gguf"];
+            List<string> features = ["sdcpp", "txt2img", "img2img", "inpainting", "negative_prompt", "batch_generation", "vae_tiling", "gguf", "controlnet"];
             features.AddRange(SDcppModelManager.GetFeaturesForArchitecture(CurrentModelArchitecture));
             return features;
         }
